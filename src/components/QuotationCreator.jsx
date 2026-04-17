@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  FiArrowLeft, FiUser, FiMapPin, FiPhone, FiTruck, 
-  FiCpu, FiTag, FiDollarSign, FiDownload, FiCheckCircle, 
-  FiSave, FiEye, FiMinusCircle, FiFileText, FiClipboard 
+  FiArrowLeft, FiUser, FiMapPin, FiPhone, FiTruck, FiCpu, 
+  FiTag, FiDollarSign, FiDownload, FiCheckCircle, FiSave, 
+  FiEye, FiMinusCircle, FiFileText, FiClipboard, FiRefreshCw 
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
@@ -10,8 +10,9 @@ import SafeIcon from '../common/SafeIcon';
 const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMode = 'quotation' }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [docMode, setDocMode] = useState(initialMode); // 'quotation', 'payment', 'delivery'
-  
+  const [docMode, setDocMode] = useState(initialMode);
+  const [appSettings, setAppSettings] = useState(null);
+
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
     controlNumber: '',
@@ -31,6 +32,12 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
   });
 
   useEffect(() => {
+    const fetchSettings = async () => {
+      const { data } = await supabase.from('app_settings_2024').select('*').eq('id', 'global_config').single();
+      if (data) setAppSettings(data);
+    };
+    fetchSettings();
+
     if (editData) {
       setFormData({
         date: editData.date || new Date().toISOString().split('T')[0],
@@ -65,6 +72,11 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
   };
 
   const generatePDF = async () => {
+    if (!appSettings) {
+      alert("System settings not loaded. Please wait.");
+      return;
+    }
+
     try {
       const { default: jsPDF } = await import('jspdf');
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -75,19 +87,20 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
       const WHITE = [255, 255, 255];
       const RED = [220, 38, 38];
       const GRAY = [100, 100, 100];
+      
       const leftMargin = 25;
       const valueX = 80;
       let y = 20;
 
-      // Header
+      // Header using App Settings
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(36);
       pdf.setTextColor(...GT_ORANGE);
-      pdf.text('GT', pageWidth / 2, y, { align: 'center' });
+      pdf.text(appSettings.header_config.title.split(' ')[0], pageWidth / 2, y, { align: 'center' });
       y += 8;
       pdf.setFontSize(14);
       pdf.setTextColor(60, 60, 60);
-      pdf.text('INTERNATIONAL', pageWidth / 2, y, { align: 'center' });
+      pdf.text(appSettings.header_config.title.split(' ').slice(1).join(' '), pageWidth / 2, y, { align: 'center' });
       y += 5;
       pdf.setFontSize(10);
       pdf.setTextColor(150, 150, 150);
@@ -96,10 +109,13 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
       y += 10;
       pdf.setFontSize(8);
       pdf.setTextColor(0, 0, 0);
-      pdf.text('D2A Industrial Lot 37B, 4th St Extension, Industrial District, THEP, SBFZ Tipo, Subic Bay Freeport Zone, 2200 Zambales', pageWidth / 2, y, { align: 'center' });
-      y += 6;
+      
+      const headerAddr = pdf.splitTextToSize(appSettings.header_config.address, 160);
+      pdf.text(headerAddr, pageWidth / 2, y, { align: 'center' });
+      y += (headerAddr.length * 4) + 2;
+      
       pdf.setFont('helvetica', 'bold');
-      pdf.text('+63 927 073 3100   info@gtintl.com.ph   +63 960 072 8684', pageWidth / 2, y, { align: 'center' });
+      pdf.text(appSettings.header_config.contact, pageWidth / 2, y, { align: 'center' });
       y += 15;
 
       // DYNAMIC TITLE
@@ -107,7 +123,7 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
       if (docMode === 'payment') docTitle = 'FULL PAYMENT RECEIPT';
       if (docMode === 'delivery') docTitle = 'DELIVERY RECEIPT';
       if (docMode === 'quotation' && (parseFloat(formData.downPayment) || 0) > 0) docTitle = 'DOWNPAYMENT RECEIPT';
-      
+
       pdf.setFontSize(22);
       pdf.setTextColor(...GT_ORANGE);
       pdf.text(docTitle, pageWidth / 2, y, { align: 'center' });
@@ -130,12 +146,15 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
       drawLabel('DATE:', y);
       drawValue(new Date(formData.date).toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }), y);
       y += 8;
+
       drawLabel('NAME:', y);
       drawValue((formData.name || '').toUpperCase(), y, true);
       y += 8;
+
       drawLabel('CONTACT:', y);
       drawValue(formData.contact || 'N/A', y);
       y += 8;
+
       drawLabel('ADDRESS:', y);
       const addressLines = pdf.splitTextToSize((formData.address || '').toUpperCase(), pageWidth - valueX - leftMargin);
       pdf.text(addressLines, valueX, y);
@@ -153,13 +172,10 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
         pdf.setTextColor(...WHITE);
         pdf.setFont('helvetica', 'bold');
         pdf.text(label, leftMargin + 5, y + 6);
-        
         pdf.setDrawColor(200, 200, 200);
         pdf.line(leftMargin + col1Width, y + rowHeight, pageWidth - leftMargin, y + rowHeight);
-        
         pdf.setTextColor(isRemarks ? RED[0] : 0, isRemarks ? RED[1] : 0, isRemarks ? RED[2] : 0);
         pdf.setFont('helvetica', isHighlight || isRemarks ? 'bold' : 'normal');
-        
         if (isHighlight) {
           pdf.text(value, pageWidth - leftMargin - 5, y + 6, { align: 'right' });
         } else {
@@ -187,84 +203,68 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
         }
       }
 
-      // BANKING DETAILS SECTION
-      y = pageHeight - 110;
-      pdf.setTextColor(...GT_ORANGE);
-      pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('BANKING DETAILS', leftMargin, y);
-      y += 4;
-      pdf.setDrawColor(...GT_ORANGE);
-      pdf.setLineWidth(0.2);
-      pdf.line(leftMargin, y, pageWidth - leftMargin, y);
-      y += 8;
+      // DYNAMIC BANKING DETAILS
+      const visibleBanks = (appSettings.banking_details || []).filter(b => b.is_visible);
+      if (visibleBanks.length > 0) {
+        y = Math.max(y + 15, pageHeight - 110); // Position relative to content or fixed bottom
+        pdf.setTextColor(...GT_ORANGE);
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text('BANKING DETAILS', leftMargin, y);
+        y += 4;
+        pdf.setDrawColor(...GT_ORANGE);
+        pdf.setLineWidth(0.2);
+        pdf.line(leftMargin, y, pageWidth - leftMargin, y);
+        y += 8;
 
-      pdf.setTextColor(0, 0, 0);
-      pdf.setFontSize(8);
-      const verticalLineX = pageWidth / 2;
-      const startBankY = y;
+        const colWidth = (pageWidth - (leftMargin * 2)) / 2;
+        let startY = y;
+        
+        visibleBanks.forEach((bank, idx) => {
+          const isSecondCol = idx % 2 !== 0;
+          const currentX = isSecondCol ? leftMargin + colWidth + 5 : leftMargin;
+          let currentY = isSecondCol ? startY : y;
 
-      // RCBC
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('RCBC', leftMargin, y);
-      pdf.setFont('helvetica', 'normal');
-      y += 4;
-      pdf.text('Account No: 0000009045644249', leftMargin, y);
-      y += 4;
-      pdf.text('Account Name: GT INTERNATIONAL INC.', leftMargin, y);
-      y += 4;
-      const addr1 = pdf.splitTextToSize('Precision Tek Bldg. Lot B, Rizal Highway, Subic Bay Freeport Zone', (pageWidth / 2) - 30);
-      pdf.text(addr1, leftMargin, y);
+          pdf.setTextColor(0, 0, 0);
+          pdf.setFontSize(8);
+          pdf.setFont('helvetica', 'bold');
+          pdf.text(bank.bank_name.toUpperCase(), currentX, currentY);
+          currentY += 4;
+          pdf.setFont('helvetica', 'normal');
+          pdf.text(`Acc No: ${bank.account_no}`, currentX, currentY);
+          currentY += 4;
+          pdf.text(`Acc Name: ${bank.account_name}`, currentX, currentY);
+          currentY += 4;
+          const bankAddr = pdf.splitTextToSize(bank.address, colWidth - 10);
+          pdf.text(bankAddr, currentX, currentY);
 
-      // BDO
-      const rightCol = verticalLineX + 5;
-      let yOpt2 = startBankY;
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('BDO', rightCol, yOpt2);
-      pdf.setFont('helvetica', 'normal');
-      yOpt2 += 4;
-      pdf.text('Account No: 010028005592', rightCol, yOpt2);
-      yOpt2 += 4;
-      pdf.text('Account Name: GT INTERNATIONAL INC.', rightCol, yOpt2);
-      yOpt2 += 4;
-      const addr2 = pdf.splitTextToSize('G/F Commercial Units 1-3, Puregold Duty Free Subic, Argonaut Highway, Subic Bay Freeport Zone', (pageWidth / 2) - 30);
-      pdf.text(addr2, rightCol, yOpt2);
+          if (!isSecondCol) {
+            y = currentY + (bankAddr.length * 4) + 5;
+          } else {
+            startY = y; // Update startY for next row if we just finished second col
+          }
+        });
+      }
 
-      // Vertical Divider
-      const endBankY = Math.max(y + (addr1.length * 4), yOpt2 + (addr2.length * 4));
-      pdf.setDrawColor(220, 220, 220);
-      pdf.line(verticalLineX, startBankY, verticalLineX, endBankY);
-
-      // SIGNATURE SECTION
-      y = pageHeight - 65;
-      pdf.setDrawColor(0, 0, 0);
-      pdf.setLineWidth(0.3);
-      
-      // Left: Customer
-      pdf.line(leftMargin, y, leftMargin + 60, y);
-      pdf.setFont('helvetica', 'bold');
-      pdf.text((formData.name || 'CUSTOMER NAME').toUpperCase(), leftMargin + 30, y + 5, { align: 'center' });
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(8);
-      pdf.text('Signature over Printed Name', leftMargin + 30, y + 9, { align: 'center' });
-      pdf.text('Customer / Recipient', leftMargin + 30, y + 13, { align: 'center' });
-
-      // Right: Company Officer
-      const rightX = pageWidth - leftMargin - 60;
-      pdf.line(rightX, y, pageWidth - leftMargin, y);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(9);
-      pdf.text(formData.officerName.toUpperCase(), rightX + 30, y + 5, { align: 'center' });
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(8);
-      pdf.text(formData.officerDesignation, rightX + 30, y + 9, { align: 'center' });
-      pdf.text('GT International Inc.', rightX + 30, y + 13, { align: 'center' });
-
+      // Footer disclaimer from Settings
       y = pageHeight - 20;
       pdf.setFont('helvetica', 'italic');
       pdf.setFontSize(7);
       pdf.setTextColor(...GRAY);
-      pdf.text("This document serves as an official record of the transaction between GT International Inc. and the customer mentioned above.", pageWidth / 2, y, { align: 'center' });
+      pdf.text(appSettings.footer_text, pageWidth / 2, y, { align: 'center' });
+
+      // Signatures
+      y = pageHeight - 65;
+      pdf.setDrawColor(0,0,0);
+      pdf.line(leftMargin, y, leftMargin + 60, y);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text((formData.name || 'CUSTOMER NAME').toUpperCase(), leftMargin + 30, y + 5, { align: 'center' });
+      
+      const rightX = pageWidth - leftMargin - 60;
+      pdf.line(rightX, y, pageWidth - leftMargin, y);
+      pdf.text(formData.officerName.toUpperCase(), rightX + 30, y + 5, { align: 'center' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(formData.officerDesignation, rightX + 30, y + 8, { align: 'center' });
 
       pdf.save(`${docTitle.replace(/\s/g, '_')}_${formData.name.replace(/\s/g, '_')}.pdf`);
     } catch (e) {
@@ -361,7 +361,13 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
 
               <div className="pt-2">
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1.5 ml-1">Remarks (Urgent/Red)</label>
-                <textarea name="remarks" rows={2} value={formData.remarks} onChange={handleInputChange} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-orange-100 outline-none text-red-600 font-bold" />
+                <textarea 
+                  name="remarks" 
+                  rows={2} 
+                  value={formData.remarks} 
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-orange-100 outline-none text-red-600 font-bold" 
+                />
               </div>
 
               {docMode !== 'delivery' && (
@@ -374,21 +380,22 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
                   </div>
                 </div>
               )}
-
-              {docMode === 'delivery' && (
-                <div className="pt-2">
-                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-1.5 ml-1">Terms & Conditions</label>
-                  <textarea name="termsConditions" rows={4} value={formData.termsConditions} onChange={handleInputChange} placeholder="Enter delivery terms..." className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-emerald-100 outline-none text-sm" />
-                </div>
-              )}
             </div>
           </div>
 
           <div className="mt-12 pt-8 border-t border-gray-100 flex flex-col md:flex-row gap-4 justify-center">
-            <button onClick={() => handleSave(false)} disabled={isSaving} className="px-8 py-4 bg-gray-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all shadow-lg">
+            <button 
+              onClick={() => handleSave(false)}
+              disabled={isSaving}
+              className="px-8 py-4 bg-gray-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all shadow-lg"
+            >
               <SafeIcon icon={isSuccess ? FiCheckCircle : FiSave} /> Save Record
             </button>
-            <button onClick={() => handleSave(true)} disabled={isSaving} className={`px-10 py-4 ${docMode === 'delivery' ? 'bg-emerald-600' : docMode === 'payment' ? 'bg-blue-600' : 'bg-orange-600'} text-white rounded-xl font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:shadow-xl transition-all`}>
+            <button 
+              onClick={() => handleSave(true)}
+              disabled={isSaving}
+              className={`px-10 py-4 ${docMode === 'delivery' ? 'bg-emerald-600' : docMode === 'payment' ? 'bg-blue-600' : 'bg-orange-600'} text-white rounded-xl font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:shadow-xl transition-all`}
+            >
               <SafeIcon icon={FiDownload} /> Generate {docMode === 'delivery' ? 'Delivery' : docMode === 'payment' ? 'Payment' : 'Quotation'} PDF
             </button>
           </div>
@@ -410,7 +417,10 @@ const InputField = ({ label, icon, className = '', ...props }) => (
     <label className="block text-[10px] font-black text-gray-400 uppercase mb-1.5 ml-1">{label}</label>
     <div className="relative">
       {icon && <SafeIcon icon={icon} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />}
-      <input {...props} className={`w-full ${icon ? 'pl-11' : 'px-4'} py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-orange-100 transition-all outline-none text-gray-800 font-medium ${className}`} />
+      <input 
+        {...props} 
+        className={`w-full ${icon ? 'pl-11' : 'px-4'} py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-orange-100 transition-all outline-none text-gray-800 font-medium ${className}`} 
+      />
     </div>
   </div>
 );

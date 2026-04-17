@@ -63,7 +63,7 @@ const ShipmentModule = () => {
   const handleSelectShipment = (s) => {
     setListLoading(true);
     setSelectedShipment(s);
-    // Visual feedback delay as requested
+    // Visual feedback delay
     setTimeout(() => setListLoading(false), 500);
   };
 
@@ -246,7 +246,7 @@ const ShipmentModule = () => {
                       </td>
                       <td className="px-8 py-7">
                         <div className="text-[10px] font-black text-gray-600 uppercase mb-1">{s.units?.length || 0} Chassis</div>
-                        <div className="text-[8px] font-bold text-gray-400 uppercase">{s.kgs.toLocaleString()} KG / {s.cbm.toLocaleString()} CBM</div>
+                        <div className="text-[8px] font-bold text-gray-400 uppercase">{s.kgs?.toLocaleString() || 0} KG / {s.cbm?.toLocaleString() || 0} CBM</div>
                       </td>
                       <td className="px-8 py-7 text-right font-black text-[15px] text-gray-900">
                         ₱{new Intl.NumberFormat().format(s.amount_php)}
@@ -296,6 +296,7 @@ const ShipmentModule = () => {
                 <span className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-3 py-1 rounded-lg">
                   {selectedShipment.is_paid ? 'SETTLED' : 'OUTSTANDING'}
                 </span>
+                <span className="text-[9px] font-bold text-white/50 uppercase">{selectedShipment.kgs} KG / {selectedShipment.cbm} CBM</span>
               </div>
             </div>
 
