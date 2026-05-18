@@ -9,6 +9,8 @@ import SafeIcon from '../common/SafeIcon';
 
 const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMode = 'quotation' }) => {
   const [isSaving, setIsSaving] = useState(false);
+  const [selectedStaff, setSelectedStaff] = useState('');
+  const staffMembers = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
   const [isSuccess, setIsSuccess] = useState(false);
   const [docMode, setDocMode] = useState(initialMode);
   const [appSettings, setAppSettings] = useState(null);
@@ -33,7 +35,8 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
 
   useEffect(() => {
     const fetchSettings = async () => {
-      const { data } = await supabase.from('app_settings_2024').select('*').eq('id', 'global_config').single();
+      const { data: settingsArr } = await supabase.from('app_settings_2024').select('*').eq('supabase_id', 'global_config');
+      const data = Array.isArray(settingsArr) ? settingsArr[0] : settingsArr;
       if (data) setAppSettings(data);
     };
     fetchSettings();
@@ -274,6 +277,7 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
   };
 
   const handleSave = async (andDownload = false) => {
+    if (!selectedStaff) { alert('⚠ Please select a staff member before saving'); return; }
     setIsSaving(true);
     try {
       const payload = {
@@ -290,7 +294,8 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
         plate_no: formData.plateNo,
         terms_conditions: formData.termsConditions,
         officer_name: formData.officerName,
-        officer_designation: formData.officerDesignation
+        officer_designation: formData.officerDesignation,
+        logged_by: selectedStaff,
       };
 
       if (editData?.id) {
@@ -383,11 +388,23 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
             </div>
           </div>
 
-          <div className="mt-12 pt-8 border-t border-gray-100 flex flex-col md:flex-row gap-4 justify-center">
+          <div className="mt-12 pt-8 border-t border-gray-100">
+            {/* Staff selector */}
+            <div className={`mb-4 p-4 rounded-2xl border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
+              <p className={`text-[8px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
+                {!selectedStaff ? '⚠ Select Staff Before Saving' : 'Logged By'}
+              </p>
+              <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
+                className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
+                <option value="">— Select Staff —</option>
+                {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col md:flex-row gap-4 justify-center">
             <button 
               onClick={() => handleSave(false)}
-              disabled={isSaving}
-              className="px-8 py-4 bg-gray-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all shadow-lg"
+              disabled={isSaving || !selectedStaff}
+              className="px-8 py-4 bg-gray-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all shadow-lg disabled:opacity-50"
             >
               <SafeIcon icon={isSuccess ? FiCheckCircle : FiSave} /> Save Record
             </button>
@@ -398,6 +415,7 @@ const QuotationCreator = ({ onBack, editData = null, readOnly = false, initialMo
             >
               <SafeIcon icon={FiDownload} /> Generate {docMode === 'delivery' ? 'Delivery' : docMode === 'payment' ? 'Payment' : 'Quotation'} PDF
             </button>
+            </div>
           </div>
         </div>
       </div>

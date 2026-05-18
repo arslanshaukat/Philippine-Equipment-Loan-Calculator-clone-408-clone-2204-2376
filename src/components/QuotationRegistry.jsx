@@ -57,54 +57,40 @@ const QuotationRegistry = ({ onCreate, onEdit }) => {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex flex-wrap gap-3">
-          <DocTypeBtn onClick={() => onCreate('quotation')} icon={FiFileText} label="New Quote" color="orange" />
-          <DocTypeBtn onClick={() => onCreate('payment')} icon={FiCheckCircle} label="Full Payment Receipt" color="blue" />
-          <DocTypeBtn onClick={() => onCreate('delivery')} icon={FiClipboard} label="Delivery Receipt" color="emerald" />
+        <div className="flex gap-2">
+          <DocTypeBtn onClick={() => onCreate('quotation')} icon={FiFileText} label="Quote" color="orange" />
+          <DocTypeBtn onClick={() => onCreate('payment')} icon={FiCheckCircle} label="Payment" color="blue" />
+          <DocTypeBtn onClick={() => onCreate('delivery')} icon={FiClipboard} label="Delivery" color="emerald" />
         </div>
       </div>
 
-      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden overflow-x-auto">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 border-b text-[10px] font-black text-gray-400 uppercase tracking-widest">
-            <tr>
-              <th className="px-6 py-5">Date</th>
-              <th className="px-6 py-5">Customer</th>
-              <th className="px-6 py-5">Unit Detail</th>
-              <th className="px-6 py-5">Pricing</th>
-              <th className="px-6 py-5 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
+      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
+        {/* Mobile card view */}
+        <div className="divide-y divide-gray-50">
             {filteredQuotes.map((quote) => (
-              <tr key={quote.id} className="hover:bg-gray-50/80 transition-colors group">
-                <td className="px-6 py-5 text-sm font-bold text-gray-500">{new Date(quote.date).toLocaleDateString()}</td>
-                <td className="px-6 py-5">
-                  <div className="font-black text-gray-900 uppercase">{quote.customer_name}</div>
-                  <div className="text-[10px] text-gray-400">{quote.address.substr(0, 30)}...</div>
-                </td>
-                <td className="px-6 py-5">
-                  <div className="text-sm font-black text-gray-700">{quote.maker}</div>
-                  <div className="text-xs text-gray-500">{quote.body_type}</div>
-                </td>
-                <td className="px-6 py-5">
-                  <div className="text-sm font-black text-gray-900">₱{new Intl.NumberFormat().format(quote.price)}</div>
-                  {quote.down_payment > 0 && (
-                    <div className="text-[10px] text-blue-600 font-bold">Paid: ₱{new Intl.NumberFormat().format(quote.down_payment)}</div>
-                  )}
-                </td>
-                <td className="px-6 py-5 text-right">
-                  <div className="flex justify-end gap-2">
+              <div key={quote.id} className="p-4 hover:bg-gray-50/80 transition-colors">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-black text-gray-900 uppercase text-sm truncate">{quote.customer_name}</div>
+                    <div className="text-[9px] text-gray-400 font-bold uppercase">{quote.maker} {quote.body_type}</div>
+                    <div className="text-[9px] text-gray-400">{new Date(quote.date).toLocaleDateString()}</div>
+                  </div>
+                  <div className="text-right ml-2 shrink-0">
+                    <div className="text-sm font-black text-gray-900">₱{new Intl.NumberFormat().format(quote.price)}</div>
+                    {quote.down_payment > 0 && (
+                      <div className="text-[9px] text-blue-600 font-bold">Paid: ₱{new Intl.NumberFormat().format(quote.down_payment)}</div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
                     <ActionBtn onClick={() => onEdit(quote, 'quotation')} icon={FiFileText} title="Quotation" color="orange" />
                     <ActionBtn onClick={() => onEdit(quote, 'payment')} icon={FiCheckCircle} title="Payment" color="blue" />
                     <ActionBtn onClick={() => onEdit(quote, 'delivery')} icon={FiClipboard} title="Delivery" color="emerald" />
                     <ActionBtn onClick={() => handleDelete(quote.id)} icon={FiTrash2} color="red" />
                   </div>
-                </td>
-              </tr>
+              </div>
             ))}
-          </tbody>
-        </table>
+        </div>
       </div>
     </div>
   );
@@ -117,7 +103,7 @@ const DocTypeBtn = ({ onClick, icon, label, color }) => {
     emerald: 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
   };
   return (
-    <button onClick={onClick} className={`${variants[color]} text-white px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg`}>
+    <button onClick={onClick} className={`${variants[color]} text-white px-3 py-3 rounded-xl font-black text-[9px] uppercase tracking-widest flex items-center gap-1.5 transition-all shadow-lg`}>
       <SafeIcon icon={icon} /> {label}
     </button>
   );

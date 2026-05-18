@@ -13,6 +13,8 @@ const PriceListModule = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [selectedStaff, setSelectedStaff] = useState('');
+  const staffMembers = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
 
   const [formData, setFormData] = useState({
     key_no: '',
@@ -53,12 +55,14 @@ const PriceListModule = () => {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!selectedStaff) { alert('⚠ Please select a staff member before saving'); return; }
     setIsSaving(true);
     try {
       const payload = {
         ...formData,
         price: parseFloat(formData.price) || 0,
-        sale_price: formData.sale_price === '' ? 0 : parseFloat(formData.sale_price)
+        sale_price: formData.sale_price === '' ? 0 : parseFloat(formData.sale_price),
+        logged_by: selectedStaff,
       };
 
       if (editingId) {
@@ -132,14 +136,14 @@ const PriceListModule = () => {
   return (
     <div className="space-y-4 print:space-y-0 print:p-0">
       {/* UI HEADER - Hidden on Print */}
-      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4 print:hidden">
+      <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 flex flex-col gap-3 print:hidden">
         <div>
           <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-tighter">
             <SafeIcon icon={FiTag} className="text-orange-600" /> Inventory Price List
           </h2>
           {/* Sorting label removed as requested */}
         </div>
-        <div className="flex gap-2 w-full md:w-auto">
+        <div className="flex gap-2 w-full">
           <div className="relative flex-1 md:w-64">
             <SafeIcon icon={FiSearch} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input 
@@ -163,8 +167,50 @@ const PriceListModule = () => {
       </div>
 
       {/* TABLE SECTION - Compact Styles */}
-      <div className="bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden print:border-none print:shadow-none print:rounded-none">
-        <table className="w-full text-left border-collapse">
+      {/* Mobile card view */}
+      <div className="sm:hidden space-y-2">
+        {filteredItems.map((item) => (
+          <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg">{item.key_no}</span>
+                <div>
+                  <div className="text-[11px] font-black text-gray-900 uppercase">{item.make}</div>
+                  <div className="text-[8px] font-bold text-orange-500 uppercase">{item.type}</div>
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={() => handleEdit(item)} className="p-2 bg-gray-50 text-gray-400 rounded-xl"><SafeIcon icon={FiEdit} /></button>
+                <button onClick={() => handleDelete(item.id)} className="p-2 bg-gray-50 text-red-300 rounded-xl"><SafeIcon icon={FiTrash2} /></button>
+              </div>
+            </div>
+            <div className="text-[10px] font-bold text-gray-700 uppercase">{item.model_engine}</div>
+            <div className="text-[8px] text-gray-400 uppercase mb-2">{item.colour} • {item.body}</div>
+            <div className="flex justify-between items-center pt-2 border-t border-gray-50">
+              <div>
+                <div className="text-[8px] text-gray-400 uppercase">Price</div>
+                <div className="text-[11px] font-black text-gray-900">{formatPHP(item.price)}</div>
+              </div>
+              {item.sale_price > 0 && (
+                <div>
+                  <div className="text-[8px] text-gray-400 uppercase">Sale</div>
+                  <div className="text-[11px] font-black text-green-600">{formatPHP(item.sale_price)}</div>
+                </div>
+              )}
+              {item.remarks && (
+                <div className="max-w-[120px]">
+                  <div className="text-[8px] text-gray-400 uppercase">Remarks</div>
+                  <div className="text-[8px] text-gray-500 truncate">{item.remarks}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table view */}
+      <div className="hidden sm:block bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden print:border-none print:shadow-none print:rounded-none print:block">
+        <div className="overflow-x-auto"><table className="w-full text-left border-collapse text-[10px]">
           <thead className="bg-gray-50 print:bg-gray-100 text-[9px] font-black text-gray-500 print:text-black uppercase tracking-wider border-b border-gray-100 print:border-black">
             <tr>
               <th className="px-4 py-3 print:px-2 print:py-1.5 w-12 text-center">Key</th>
@@ -179,7 +225,7 @@ const PriceListModule = () => {
           <tbody className="divide-y divide-gray-50 print:divide-black/10">
             {filteredItems.map((item) => (
               <tr key={item.id} className="hover:bg-orange-50/30 transition-all group print:break-inside-avoid">
-                <td className="px-4 py-3 print:px-2 print:py-1 font-black text-[11px] text-gray-900 text-center">{item.key_no}</td>
+                <td className="px-2 py-3 print:px-2 print:py-1 font-black text-[10px] text-gray-900 text-center">{item.key_no}</td>
                 <td className="px-4 py-3 print:px-2 print:py-1">
                   <div className="text-[10px] font-black text-gray-900 uppercase">{item.make}</div>
                   <div className="text-[8px] font-bold text-orange-600 uppercase print:text-black mt-0.5">{item.type}</div>
@@ -198,7 +244,7 @@ const PriceListModule = () => {
                   {item.remarks || '--'}
                 </td>
                 <td className="px-4 py-3 text-right print:hidden">
-                  <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <div className="flex justify-end gap-1">
                     <button onClick={() => handleEdit(item)} className="p-2 text-gray-400 hover:text-orange-600"><SafeIcon icon={FiEdit} /></button>
                     <button onClick={() => handleDelete(item.id)} className="p-2 text-gray-300 hover:text-red-600"><SafeIcon icon={FiTrash2} /></button>
                   </div>
@@ -206,7 +252,7 @@ const PriceListModule = () => {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       {/* FOOTER - Only visible on print */}
@@ -217,13 +263,13 @@ const PriceListModule = () => {
 
       {/* FORM MODAL */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-4xl rounded-[32px] shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-white w-full max-w-4xl rounded-t-[24px] sm:rounded-[24px] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[92vh] flex flex-col">
             <div className="bg-orange-600 p-6 text-white flex justify-between items-center">
               <h3 className="text-xl font-black uppercase tracking-tight">{editingId ? 'Edit Item' : 'Add to Inventory'}</h3>
               <button onClick={() => setShowModal(false)} className="p-2 hover:bg-white/10 rounded-full"><SafeIcon icon={FiX} /></button>
             </div>
-            <form onSubmit={handleSave} className="p-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+            <form onSubmit={handleSave} className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 overflow-y-auto flex-1">
               <InputBox label="Key No." value={formData.key_no} onChange={e => setFormData({...formData, key_no: e.target.value.toUpperCase()})} required />
               <InputBox label="Make (Brand)" value={formData.make} onChange={e => setFormData({...formData, make: e.target.value.toUpperCase()})} required />
               <InputBox label="Type (Unit Type)" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value.toUpperCase()})} required />
@@ -236,7 +282,17 @@ const PriceListModule = () => {
                 <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Remarks</label>
                 <textarea value={formData.remarks} onChange={e => setFormData({...formData, remarks: e.target.value.toUpperCase()})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none" rows={2} />
               </div>
-              <button type="submit" disabled={isSaving} className="md:col-span-4 py-4 bg-orange-600 text-white rounded-xl font-black uppercase tracking-widest hover:bg-orange-700 transition-all">
+              <div className="md:col-span-4">
+                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">
+                  {!selectedStaff ? '⚠ Select Staff Before Saving' : 'Logged By'}
+                </label>
+                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
+                  className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none mb-3 ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}>
+                  <option value="">— Select Staff —</option>
+                  {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <button type="submit" disabled={isSaving || !selectedStaff} className="md:col-span-4 py-4 bg-orange-600 text-white rounded-xl font-black uppercase tracking-widest hover:bg-orange-700 transition-all disabled:opacity-50">
                 {isSaving ? 'Saving...' : 'Save Record'}
               </button>
             </form>

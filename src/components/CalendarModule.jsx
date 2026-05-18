@@ -7,11 +7,24 @@ import {
   FiDollarSign
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
+import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
+
+// Get proper image URL — handles PocketBase file URLs and legacy data URLs
+function getImageUrl(url, record) {
+  if (!url) return null;
+  if (url.startsWith('data:') || url.startsWith('http') || url.startsWith('/')) return url;
+  // PocketBase filename — build full URL
+  if (record?.id && record?.collectionId) {
+    return `/api/files/${record.collectionId}/${record.id}/${url}`;
+  }
+  return url;
+}
+
 
 const CalendarModule = () => {
   // Set default view to 'list'
-  const [viewMode, setViewMode] = useState('list');
+  const [viewMode, setViewMode] = useState('grid');
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -21,7 +34,7 @@ const CalendarModule = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDate, setFilterDate] = useState('');
   
-  const staffMembers = ["RHEA", "MEL", "CARMELITA", "ARSLAN"];
+  const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
   
   const [formData, setFormData] = useState({
     client_name: '',
@@ -40,6 +53,7 @@ const CalendarModule = () => {
   });
 
   const [uploading, setUploading] = useState(false);
+  const [lightbox, setLightbox] = useState({ open: false, urls: [], idx: 0 });
 
   const fetchData = async () => {
     setLoading(true);
@@ -82,16 +96,14 @@ const CalendarModule = () => {
     if (files.length === 0) return;
     setUploading(true);
     try {
-      const newUrls = [];
-      for (const file of files) {
-        const fileName = `${Date.now()}_${file.name.replace(/\s/g, '_')}`;
-        const filePath = `crm_attachments/${fileName}`;
-        const { error } = await supabase.storage.from('attachments').upload(filePath, file);
-        if (error) throw error;
-        const { data: { publicUrl } } = supabase.storage.from('attachments').getPublicUrl(filePath);
-        newUrls.push(publicUrl);
-      }
-      setFormData(prev => ({ ...prev, attachment_urls: [...(prev.attachment_urls || []), ...newUrls] }));
+      // Upload files to PocketBase using FormData
+      // Files are attached to the visit_schedules_2024 record on save
+      // Store them temporarily as object URLs for preview
+      const newFiles = Array.from(files);
+      setFormData(prev => ({
+        ...prev,
+        _pendingFiles: [...(prev._pendingFiles || []), ...newFiles],
+      }));
     } catch (err) {
       alert("Upload failed: " + err.message);
     } finally {
@@ -103,24 +115,63 @@ const CalendarModule = () => {
     e.preventDefault();
     setIsSaving(true);
     try {
-      const payload = {
+      const pendingFiles = formData._pendingFiles || [];
+
+      // Build payload for PocketBase directly via FormData (supports file upload)
+      const fd = new FormData();
+      const fields = {
         ...formData,
         make: (formData.make || '').toUpperCase(),
         model: (formData.model || '').toUpperCase(),
         body_type: (formData.body_type || '').toUpperCase(),
         client_name: (formData.client_name || '').toUpperCase(),
         unit_engine: (formData.unit_engine || '').toUpperCase(),
-        offered_price: parseFloat(formData.offered_price) || 0,
-        unit_name: `${formData.make} ${formData.model}`.toUpperCase()
+        offered_price: String(parseFloat(formData.offered_price) || 0),
+        unit_name: `${formData.make} ${formData.model}`.toUpperCase(),
       };
-      if (selectedLead?.id) {
-        await supabase.from('visit_schedules_2024').update(payload).eq('id', selectedLead.id);
-      } else {
-        await supabase.from('visit_schedules_2024').insert([payload]);
+      delete fields._pendingFiles;
+      delete fields.attachment_urls;
+      delete fields.images;
+      delete fields.collectionId;
+      delete fields.collectionName;
+      delete fields.expand;
+
+      // Append text fields
+      for (const [k, v] of Object.entries(fields)) {
+        if (v !== null && v !== undefined) {
+          fd.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+        }
       }
+
+      // Append image files
+      for (const file of pendingFiles) {
+        fd.append('images', file);
+      }
+
+      let pbRecord;
+      if (selectedLead?.id) {
+        // Find PB record by id (PB id stored in selectedLead)
+        const pbId = selectedLead.collectionId ? selectedLead.id : null;
+        if (pbId) {
+          pbRecord = await pb.collection('visit_schedules_2024').update(pbId, fd);
+        } else {
+          // Find by supabase_id
+          const found = await pb.collection('visit_schedules_2024').getFullList({
+            filter: `supabase_id="${selectedLead.id}" || id="${selectedLead.id}"`
+          });
+          if (found.length > 0) {
+            pbRecord = await pb.collection('visit_schedules_2024').update(found[0].id, fd);
+          }
+        }
+      } else {
+        pbRecord = await pb.collection('visit_schedules_2024').create(fd);
+      }
+
+      console.log('Saved to PocketBase:', pbRecord?.id, 'images:', pbRecord?.images);
       setShowForm(false);
       fetchData();
     } catch (err) {
+      console.error('Save error:', err);
       alert("Save Error: " + err.message);
     } finally {
       setIsSaving(false);
@@ -137,18 +188,18 @@ const CalendarModule = () => {
   });
 
   return (
-    <div className="space-y-6 pb-24 lg:pb-0">
+    <div className="space-y-4 pb-20 lg:pb-0">
       {/* CRM HEADER */}
-      <div className="bg-white p-5 lg:p-8 rounded-[32px] shadow-sm border border-gray-100">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
+      <div className="bg-white p-3 lg:p-8 rounded-[24px] lg:rounded-[32px] shadow-sm border border-gray-100">
+        <div className="flex flex-col gap-3 mb-4">
           <div>
-            <h2 className="text-xl lg:text-2xl font-black text-gray-900 flex items-center gap-3 uppercase tracking-tighter">
-              <div className="bg-blue-600 p-2.5 rounded-xl text-white shadow-lg shadow-blue-100">
-                <SafeIcon icon={FiActivity} />
+            <h2 className="text-base lg:text-2xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-tighter">
+              <div className="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-100">
+                <SafeIcon icon={FiActivity} className="text-sm" />
               </div> 
               CRM Hub
             </h2>
-            <p className="text-[9px] text-gray-400 font-black uppercase tracking-[0.2em] mt-1.5 ml-1">
+            <p className="text-[8px] text-gray-400 font-black uppercase tracking-[0.2em] mt-1 ml-1 hidden sm:block">
               Command Center Registry v2.6
             </p>
           </div>
@@ -169,7 +220,7 @@ const CalendarModule = () => {
           </div>
         </div>
 
-        <div className="flex flex-col lg:flex-row justify-between items-center gap-4 bg-gray-50 p-2 rounded-[24px]">
+        <div className="flex flex-col sm:flex-row gap-2 bg-gray-50 p-2 rounded-[20px]">
           <div className="relative flex-1 w-full">
             <SafeIcon icon={FiSearch} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" />
             <input 
@@ -180,8 +231,8 @@ const CalendarModule = () => {
               className="w-full pl-12 pr-4 py-3.5 bg-white border border-gray-200 rounded-[18px] text-[11px] font-bold outline-none focus:ring-4 focus:ring-blue-100 transition-all" 
             />
           </div>
-          <div className="flex items-center gap-2 w-full lg:w-auto">
-            <div className="relative flex-1 md:w-48">
+          <div className="flex items-center gap-2 w-full">
+            <div className="relative flex-1">
               <SafeIcon icon={FiFilter} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xs" />
               <input 
                 type="date" 
@@ -190,7 +241,7 @@ const CalendarModule = () => {
                 className="w-full pl-10 pr-3 py-3.5 bg-white border border-gray-200 rounded-[18px] text-[10px] font-black uppercase outline-none focus:ring-4 focus:ring-blue-100" 
               />
             </div>
-            <div className="flex items-center gap-1 bg-gray-200/50 p-1 rounded-[18px]">
+            <div className="hidden sm:flex items-center gap-1 bg-gray-200/50 p-1 rounded-[18px]">
               <button onClick={() => setViewMode('grid')} className={`p-2.5 rounded-xl transition-all ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><SafeIcon icon={FiGrid} /></button>
               <button onClick={() => setViewMode('list')} className={`p-2.5 rounded-xl transition-all ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><SafeIcon icon={FiMenu} /></button>
             </div>
@@ -204,7 +255,7 @@ const CalendarModule = () => {
           <div className="p-20 text-center text-gray-300 font-black uppercase text-[10px] tracking-widest bg-white rounded-[32px]">Accessing Database...</div>
         ) : filteredLeads.length > 0 ? (
           viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredLeads.map(item => (
                 <InquiryCard 
                   key={item.id} 
@@ -216,8 +267,22 @@ const CalendarModule = () => {
               ))}
             </div>
           ) : (
-            <div className="bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden overflow-x-auto">
-              <table className="w-full text-left min-w-[1000px]">
+            <>
+            {/* Mobile always shows grid */}
+            <div className="grid grid-cols-1 sm:hidden gap-4">
+              {filteredLeads.map(item => (
+                <InquiryCard 
+                  key={item.id} 
+                  item={item} 
+                  onView={() => setSelectedDetail(item)}
+                  onEdit={(e) => { e.stopPropagation(); setSelectedLead(item); setFormData({ ...item, attachment_urls: item.attachment_urls || [] }); setShowForm(true); }} 
+                  onDelete={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                />
+              ))}
+            </div>
+            {/* Desktop list view */}
+            <div className="hidden sm:block bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden">
+              <div className="overflow-x-auto"><table className="w-full text-left min-w-[700px]">
                 <thead className="bg-gray-50 border-b text-[9px] font-black text-gray-400 uppercase tracking-widest">
                   <tr>
                     <th className="px-6 py-4 w-16">Unit</th>
@@ -240,8 +305,9 @@ const CalendarModule = () => {
                     />
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </div>
+            </>
           )
         ) : (
           <div className="p-24 text-center text-gray-200 font-black uppercase text-[10px] bg-white rounded-[32px] border-2 border-dashed border-gray-100">No matching records</div>
@@ -322,26 +388,29 @@ const CalendarModule = () => {
                 <div className="space-y-6">
                   <DetailSectionLabel icon={FiCamera} text="Unit Visual Documentation" />
                   <div className="grid grid-cols-1 gap-4 mt-6">
-                    {selectedDetail.attachment_urls && selectedDetail.attachment_urls.length > 0 ? (
-                      selectedDetail.attachment_urls.map((url, idx) => (
-                        <div key={idx} className="group relative rounded-3xl overflow-hidden border-2 border-gray-100 shadow-sm transition-all hover:border-blue-200">
+                    {(() => {
+                      const supaUrls = selectedDetail.attachment_urls || [];
+                      const pbImages = (selectedDetail.images || []).map(
+                        fname => `/api/files/${selectedDetail.collectionId}/${selectedDetail.id}/${fname}`
+                      );
+                      const allUrls = [...supaUrls, ...pbImages];
+                      return allUrls.length > 0 ? allUrls.map((url, idx) => (
+                        <div key={idx} className="group relative rounded-3xl overflow-hidden border-2 border-gray-100 shadow-sm transition-all hover:border-blue-200 cursor-pointer"
+                          onClick={() => setLightbox({ open: true, urls: allUrls, idx })}>
                           <img src={url} className="w-full h-64 object-cover transition-transform duration-700 group-hover:scale-105" alt={`unit-${idx}`} />
-                          <a 
-                            href={url} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="absolute bottom-4 right-4 p-3 bg-white/90 backdrop-blur-md text-blue-600 rounded-xl opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110"
-                          >
-                            <SafeIcon icon={FiExternalLink} />
-                          </a>
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+                            <span className="opacity-0 group-hover:opacity-100 bg-white/90 text-blue-600 text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl shadow-lg transition-all">
+                              View Full
+                            </span>
+                          </div>
                         </div>
-                      ))
-                    ) : (
-                      <div className="h-64 bg-gray-50 rounded-[40px] border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-300 gap-3">
-                        <SafeIcon icon={FiImage} className="text-5xl" />
-                        <span className="text-[10px] font-black uppercase tracking-widest">No Visuals Attached</span>
-                      </div>
-                    )}
+                      )) : (
+                        <div className="h-64 bg-gray-50 rounded-[40px] border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-300 gap-3">
+                          <SafeIcon icon={FiImage} className="text-5xl" />
+                          <span className="text-[10px] font-black uppercase tracking-widest">No Visuals Attached</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -395,7 +464,7 @@ const CalendarModule = () => {
                   <SectionLabel icon={FiTruck} text="Technical Specifications" />
                   <div className="grid grid-cols-2 gap-4">
                     <FormInput label="Make (Brand)" value={formData.make} onChange={e => setFormData({ ...formData, make: e.target.value })} required />
-                    <FormInput label="Model Code" value={formData.model} onChange={e => setFormData({ ...formData, model: e.target.value })} required />
+                    <FormInput label="Model Code" value={formData.model} onChange={e => setFormData({ ...formData, model: e.target.value })} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <FormInput label="Body Type" placeholder="E.G. DUMP/WINGVAN" value={formData.body_type} onChange={e => setFormData({ ...formData, body_type: e.target.value })} />
@@ -406,15 +475,53 @@ const CalendarModule = () => {
                   <div className="pt-2">
                     <label className="block text-[9px] font-black text-gray-400 uppercase mb-3 ml-1">Unit Visuals (Max 5)</label>
                     <div className="grid grid-cols-3 gap-3">
+                      {/* Existing PocketBase images */}
+                      {(formData.images || []).map((fname, idx) => {
+                        const url = `/api/files/${formData.collectionId}/${formData.id}/${fname}`;
+                        const allPbUrls = (formData.images || []).map(f => `/api/files/${formData.collectionId}/${formData.id}/${f}`);
+                        return (
+                          <div key={'pb-'+idx} className="relative group aspect-square cursor-pointer"
+                            onClick={() => setLightbox({ open: true, urls: allPbUrls, idx })}>
+                            <img src={url} className="w-full h-full rounded-2xl object-cover border-2 border-green-100 shadow-sm group-hover:border-green-400 transition-all" alt="unit" />
+                            <div className="absolute bottom-1 left-1 bg-green-500 text-white text-[6px] font-black px-1.5 py-0.5 rounded-lg">Saved</div>
+                            <button type="button"
+                              onClick={async e => {
+                                e.stopPropagation();
+                                if (!window.confirm('Delete this image?')) return;
+                                try {
+                                  // Send empty string to remove specific file — PB syntax: field-=filename
+                                  const fd = new FormData();
+                                  fd.append('images-', fname);
+                                  await pb.collection('visit_schedules_2024').update(formData.id, fd);
+                                  setFormData(prev => ({ ...prev, images: prev.images.filter(f => f !== fname) }));
+                                } catch(err) { alert('Delete failed: ' + err.message); }
+                              }}
+                              className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-lg hover:scale-110 transition-all opacity-0 group-hover:opacity-100">
+                              <SafeIcon icon={FiX} className="text-xs" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {/* Supabase URLs */}
                       {(formData.attachment_urls || []).map((url, idx) => (
-                        <div key={idx} className="relative group aspect-square">
+                        <div key={'sb-'+idx} className="relative group aspect-square">
                           <img src={url} className="w-full h-full rounded-2xl object-cover border-2 border-blue-100 shadow-sm" alt="unit" />
                           <button type="button" onClick={() => setFormData(prev => ({ ...prev, attachment_urls: prev.attachment_urls.filter((_, i) => i !== idx) }))} className="absolute -top-2 -right-2 bg-red-500 text-white p-2 rounded-full shadow-lg hover:scale-110 transition-all">
                             <SafeIcon icon={FiX} className="text-xs" />
                           </button>
                         </div>
                       ))}
-                      {(!formData.attachment_urls || formData.attachment_urls.length < 5) && (
+                      {/* Pending new uploads preview */}
+                      {(formData._pendingFiles || []).map((file, idx) => (
+                        <div key={'new-'+idx} className="relative group aspect-square">
+                          <img src={URL.createObjectURL(file)} className="w-full h-full rounded-2xl object-cover border-2 border-orange-100 shadow-sm" alt="new" />
+                          <div className="absolute bottom-1 left-1 bg-orange-500 text-white text-[6px] font-black px-1.5 py-0.5 rounded-lg">New</div>
+                          <button type="button" onClick={() => setFormData(prev => ({ ...prev, _pendingFiles: prev._pendingFiles.filter((_, i) => i !== idx) }))} className="absolute -top-2 -right-2 bg-red-500 text-white p-2 rounded-full shadow-lg hover:scale-110 transition-all">
+                            <SafeIcon icon={FiX} className="text-xs" />
+                          </button>
+                        </div>
+                      ))}
+                      {((formData.images?.length || 0) + (formData.attachment_urls?.length || 0) + (formData._pendingFiles?.length || 0) < 5) && (
                         <label className="aspect-square flex flex-col items-center justify-center bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-all">
                           <SafeIcon icon={uploading ? FiRefreshCw : FiCamera} className={`text-2xl mb-1 ${uploading ? 'animate-spin text-blue-600' : 'text-gray-400'}`} />
                           <span className="text-[8px] font-black text-gray-400 uppercase">Upload</span>
@@ -434,13 +541,64 @@ const CalendarModule = () => {
           </div>
         </div>
       )}
+    {/* LIGHTBOX */}
+    {lightbox.open && (
+      <div className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center"
+        onClick={() => setLightbox({ open: false, urls: [], idx: 0 })}>
+        <div className="relative w-full h-full flex items-center justify-center p-4"
+          onClick={e => e.stopPropagation()}>
+
+          {/* Close */}
+          <button onClick={() => setLightbox({ open: false, urls: [], idx: 0 })}
+            className="absolute top-4 right-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-all backdrop-blur-md">
+            <SafeIcon icon={FiX} className="text-xl" />
+          </button>
+
+          {/* Counter */}
+          {lightbox.urls.length > 1 && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md text-white text-[11px] font-black px-4 py-2 rounded-full uppercase tracking-widest">
+              {lightbox.idx + 1} / {lightbox.urls.length}
+            </div>
+          )}
+
+          {/* Image */}
+          <img
+            src={lightbox.urls[lightbox.idx]}
+            className="max-h-[85vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl"
+            alt="unit"
+          />
+
+          {/* Prev */}
+          {lightbox.urls.length > 1 && lightbox.idx > 0 && (
+            <button onClick={() => setLightbox(l => ({ ...l, idx: l.idx - 1 }))}
+              className="absolute left-4 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-all backdrop-blur-md">
+              <SafeIcon icon={FiChevronLeft} className="text-xl" />
+            </button>
+          )}
+
+          {/* Next */}
+          {lightbox.urls.length > 1 && lightbox.idx < lightbox.urls.length - 1 && (
+            <button onClick={() => setLightbox(l => ({ ...l, idx: l.idx + 1 }))}
+              className="absolute right-4 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-all backdrop-blur-md">
+              <SafeIcon icon={FiChevronRight} className="text-xl" />
+            </button>
+          )}
+        </div>
+      </div>
+    )}
     </div>
   );
 };
 
 /* COMPACT LIST ROW */
 const InquiryRow = ({ item, onView, onEdit, onDelete }) => {
-  const images = item.attachment_urls || (item.attachment_url ? [item.attachment_url] : []);
+  const pbImageUrls = (item.images || []).map(
+    fname => `/api/files/${item.collectionId}/${item.id}/${fname}`
+  );
+  const images = [
+    ...(item.attachment_urls || (item.attachment_url ? [item.attachment_url] : [])),
+    ...pbImageUrls
+  ];
   return (
     <tr onClick={onView} className="hover:bg-blue-50 transition-all group cursor-pointer">
       <td className="px-6 py-4">
@@ -481,12 +639,18 @@ const InquiryRow = ({ item, onView, onEdit, onDelete }) => {
 
 /* GRID CARD */
 const InquiryCard = ({ item, onView, onEdit, onDelete }) => {
-  const images = item.attachment_urls || (item.attachment_url ? [item.attachment_url] : []);
+  const pbImageUrls = (item.images || []).map(
+    fname => `/api/files/${item.collectionId}/${item.id}/${fname}`
+  );
+  const images = [
+    ...(item.attachment_urls || (item.attachment_url ? [item.attachment_url] : [])),
+    ...pbImageUrls
+  ];
 
   return (
-    <div onClick={onView} className="bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden hover:shadow-2xl hover:border-blue-100 transition-all group cursor-pointer">
+    <div onClick={onView} className="bg-white rounded-[24px] shadow-sm border border-gray-100 overflow-hidden hover:shadow-xl hover:border-blue-100 transition-all group cursor-pointer">
       {images.length > 0 ? (
-        <div className="h-48 w-full relative overflow-hidden bg-gray-100">
+        <div className="h-36 sm:h-48 w-full relative overflow-hidden bg-gray-100">
           <img src={images[0]} className="w-full h-full object-cover" alt="unit" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
           <div className="absolute top-4 left-4 flex gap-2">
@@ -502,7 +666,7 @@ const InquiryCard = ({ item, onView, onEdit, onDelete }) => {
           </div>
         </div>
       ) : (
-        <div className="h-48 w-full bg-gray-50 flex flex-col items-center justify-center text-gray-200 gap-2 border-b group-hover:bg-blue-50 transition-colors">
+        <div className="h-36 sm:h-48 w-full bg-gray-50 flex flex-col items-center justify-center text-gray-200 gap-2 border-b group-hover:bg-blue-50 transition-colors">
           <SafeIcon icon={FiImage} className="text-4xl" />
           <span className="text-[8px] font-black uppercase text-gray-400">{item.scheduled_date}</span>
           <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-all">
@@ -510,7 +674,7 @@ const InquiryCard = ({ item, onView, onEdit, onDelete }) => {
           </div>
         </div>
       )}
-      <div className="p-6">
+      <div className="p-4">
         <div className="flex justify-between items-start mb-6">
           <div className="min-w-0">
             {!images.length && (
@@ -524,14 +688,14 @@ const InquiryCard = ({ item, onView, onEdit, onDelete }) => {
           </div>
         </div>
         
-        <div className="grid grid-cols-2 gap-3 mb-6">
+        <div className="grid grid-cols-2 gap-2 mb-3">
           <DetailMini icon={FiTruck} label="Brand" val={item.make} />
           <DetailMini icon={FiArchive} label="Body" val={item.body_type || 'STD'} />
           <DetailMini icon={FiArchive} label="Model" val={item.model} />
           <DetailMini icon={FiCpu} label="Engine #" val={item.unit_engine || 'STD'} />
         </div>
 
-        <div className="bg-blue-600 p-4 rounded-2xl flex justify-between items-center shadow-lg shadow-blue-100">
+        <div className="bg-blue-600 p-3 rounded-xl flex justify-between items-center shadow-lg shadow-blue-100">
           <div>
             <p className="text-[8px] font-black text-white/50 uppercase tracking-widest">Inquiry Price</p>
             <p className="text-[14px] font-black text-white">₱{new Intl.NumberFormat().format(item.offered_price || 0)}</p>

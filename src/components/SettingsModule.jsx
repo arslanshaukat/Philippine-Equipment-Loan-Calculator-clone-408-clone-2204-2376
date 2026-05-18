@@ -17,18 +17,34 @@ const SettingsModule = () => {
 
   const fetchSettings = async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('app_settings_2024')
-      .select('*')
-      .eq('id', 'global_config')
-      .single();
-    
-    if (data) {
-      // Ensure banking_details is an array
-      const banking = Array.isArray(data.banking_details) ? data.banking_details : [];
-      setSettings({ ...data, banking_details: banking });
+    try {
+      const { data, error } = await supabase
+        .from('app_settings_2024')
+        .select('*')
+        .eq('supabase_id', 'global_config');
+
+      console.log('[Settings] raw data:', data, 'error:', error);
+
+      const record = Array.isArray(data) ? data[0] : data;
+      if (record) {
+        let banking = record.banking_details;
+        if (typeof banking === 'string') { try { banking = JSON.parse(banking); } catch(e) { banking = []; } }
+        if (!Array.isArray(banking)) banking = [];
+
+        let header = record.header_config;
+        if (typeof header === 'string') { try { header = JSON.parse(header); } catch(e) { header = {}; } }
+        if (!header || typeof header !== 'object') header = {};
+
+        console.log('[Settings] banking:', banking, 'header:', header);
+        setSettings({ ...record, banking_details: banking, header_config: header });
+      } else {
+        console.warn('[Settings] No record found');
+      }
+    } catch(err) {
+      console.error('[Settings] fetchSettings error:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleSave = async (e) => {
@@ -41,7 +57,7 @@ const SettingsModule = () => {
           ...settings,
           updated_at: new Date().toISOString()
         })
-        .eq('id', 'global_config');
+        .eq('supabase_id', 'global_config');
       
       if (error) throw error;
       alert("Settings synchronized! All documents will reflect these changes.");
@@ -84,6 +100,15 @@ const SettingsModule = () => {
   };
 
   if (loading) return <div className="p-20 text-center"><FiRefreshCw className="animate-spin text-4xl text-blue-600 mx-auto" /></div>;
+
+  if (!settings) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">Loading Settings...</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-32">

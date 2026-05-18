@@ -12,6 +12,8 @@ const CallLogModule = () => {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [phoneMatches, setPhoneMatches] = useState([]);
+  const [lookingUp, setLookingUp] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState(null);
   
@@ -27,7 +29,7 @@ const CallLogModule = () => {
     comment: ''
   });
 
-  const staffMembers = ["RHEA", "MEL", "CARMELITA", "ARSLAN"];
+  const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -49,15 +51,33 @@ const CallLogModule = () => {
     fetchLogs();
   }, []);
 
+  const lookupPhone = async (phone) => {
+    if (!phone || phone.length < 7) { setPhoneMatches([]); return; }
+    setLookingUp(true);
+    try {
+      const [callRes, followRes] = await Promise.all([
+        supabase.from('daily_call_logs_2024').select('id,customer_name,phone_number,status,created_at').eq('phone_number', phone),
+        supabase.from('follow_ups_2024').select('id,customer_name,phone_number,status,last_contacted_at')
+          .eq('phone_number', phone),
+      ]);
+      const calls = (callRes.data || []).map(r => ({ ...r, _source: 'Calls' }));
+      const follows = (followRes.data || []).map(r => ({ ...r, _source: 'Follows' }));
+      setPhoneMatches([...follows, ...calls]);
+    } catch(e) { console.error(e); }
+    finally { setLookingUp(false); }
+  };
+
   const handleSaveCall = async (e) => {
     e.preventDefault();
     setIsSaving(true);
     try {
+      const now = new Date().toISOString();
       const payload = {
         ...formData,
         customer_name: formData.customer_name.toUpperCase(),
         reason: formData.reason.toUpperCase(),
-        is_answered: formData.status === 'Answered'
+        is_answered: formData.status === 'Answered',
+        updated_at: now,
       };
 
       if (editingId) {
@@ -90,7 +110,7 @@ const CallLogModule = () => {
     try {
       const historyEntry = {
         date: new Date().toLocaleString(),
-        comment: `PROMOTED FROM CALL LOG: ${log.comment || 'NO COMMENT'}`,
+        comment: `PROMOTED FROM CALL LOG [${new Date().toLocaleString()}]: ${log.comment || 'NO COMMENT'}`,
         staff: log.staff_name || 'SYSTEM',
         action: updates.temperature === 'Hot' ? 'Hot Prospect' : 'Moved to CRM'
       };
@@ -165,7 +185,8 @@ const CallLogModule = () => {
       if (log.status === 'To Call') {
         queue.push(log);
       } else {
-        const date = new Date(log.created_at).toLocaleDateString('en-US', {
+        const displayDate = log.updated_at || log.created_at;
+        const date = new Date(displayDate).toLocaleDateString('en-US', {
           weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
         });
         if (!history[date]) history[date] = [];
@@ -177,10 +198,10 @@ const CallLogModule = () => {
   }, [logs, searchTerm]);
 
   return (
-    <div className="flex flex-col xl:flex-row gap-6 h-[calc(100vh-180px)] overflow-hidden">
+    <div className="flex flex-col xl:flex-row gap-3">
       
       {/* COLUMN 1: FORM */}
-      <div className="w-full xl:w-[360px] shrink-0 flex flex-col h-full">
+      <div className="w-full xl:w-[360px] shrink-0 flex flex-col">
         <div className="bg-white rounded-[32px] shadow-xl border border-gray-100 flex flex-col h-full overflow-hidden">
           <div className={`${editingId ? 'bg-orange-600' : 'bg-blue-700'} p-6 text-white shrink-0`}>
             <h3 className="text-sm font-black uppercase tracking-tight flex items-center gap-3">
@@ -188,7 +209,7 @@ const CallLogModule = () => {
               {editingId ? 'Process Call' : 'New Call Log'}
             </h3>
           </div>
-          <form onSubmit={handleSaveCall} className="p-6 space-y-4 flex-1 overflow-y-auto no-scrollbar">
+          <form onSubmit={handleSaveCall} className="p-6 space-y-4 overflow-y-auto no-scrollbar max-h-[70vh] xl:max-h-none xl:flex-1">
             <div className="space-y-1">
               <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Encoded By</label>
               <select value={formData.staff_name} onChange={e => setFormData({...formData, staff_name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-100 uppercase">
@@ -196,7 +217,51 @@ const CallLogModule = () => {
               </select>
             </div>
             <FormInput label="Customer Name" value={formData.customer_name} onChange={e => setFormData({...formData, customer_name: e.target.value})} placeholder="NAME" required />
-            <FormInput label="Phone Number" value={formData.phone_number} onChange={e => setFormData({...formData, phone_number: e.target.value})} placeholder="09XX..." required />
+            <div className="space-y-1">
+              <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Phone Number</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={formData.phone_number}
+                  onChange={e => { setFormData({...formData, phone_number: e.target.value}); setPhoneMatches([]); }}
+                  placeholder="09XX..."
+                  required
+                  className="flex-1 min-w-0 px-3 py-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-100"
+                />
+                <button type="button" onClick={() => lookupPhone(formData.phone_number)}
+                  className="shrink-0 px-3 py-3 bg-indigo-600 text-white rounded-xl font-black text-[9px] uppercase hover:bg-indigo-700 transition-all">
+                  {lookingUp ? '...' : 'Check'}
+                </button>
+              </div>
+
+              {/* Phone match results */}
+              {phoneMatches.length > 0 && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-[8px] font-black text-orange-600 uppercase tracking-widest">⚠ {phoneMatches.length} existing record(s) found:</p>
+                  {phoneMatches.map((m, i) => (
+                    <div key={i} className="p-3 bg-orange-50 border border-orange-200 rounded-xl">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-[10px] font-black text-gray-900 uppercase">{m.customer_name}</p>
+                          <p className="text-[8px] font-black text-orange-600 uppercase">{m._source} • {m.status}</p>
+                          {m.last_contacted_at && <p className="text-[7px] text-gray-400 font-bold">Last: {new Date(m.last_contacted_at).toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'})}</p>}
+                          {m.created_at && !m.last_contacted_at && <p className="text-[7px] text-gray-400 font-bold">Added: {new Date(m.created_at).toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'})}</p>}
+                        </div>
+                        <button type="button"
+                          onClick={() => { setFormData({...formData, customer_name: m.customer_name, phone_number: m.phone_number, status: 'To Call'}); setPhoneMatches([]); }}
+                          className="text-[7px] font-black px-2 py-1 bg-indigo-600 text-white rounded-lg uppercase">
+                          Use
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-[7px] font-black text-gray-400 uppercase">You can still proceed — this is just a warning.</p>
+                </div>
+              )}
+              {phoneMatches.length === 0 && formData.phone_number.length >= 7 && !lookingUp && (
+                <p className="text-[7px] font-black text-green-600 uppercase mt-1">✓ No existing records found</p>
+              )}
+            </div>
             <FormInput label="Reason" value={formData.reason} onChange={e => setFormData({...formData, reason: e.target.value})} placeholder="INQUIRY REASON" required />
             
             <div className="space-y-1">
@@ -208,12 +273,76 @@ const CallLogModule = () => {
               </div>
             </div>
 
+            {/* Quick Call Attempt Buttons */}
+            <div className="space-y-1">
+              <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Call Attempts</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3].map(n => (
+                  <button key={n} type="button"
+                    onClick={() => {
+                      const t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                      setFormData(prev => ({
+                        ...prev,
+                        comment: `CALLED ${n}X @ ${t}`,
+                        status: 'Not Answered'
+                      }));
+                    }}
+                    className="py-3 bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all border border-blue-100 hover:border-blue-600 flex flex-col items-center gap-1">
+                    <span className="text-base font-black">{n}x</span>
+                    <span className="text-[7px]">Attempted</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <textarea value={formData.comment} onChange={e => setFormData({...formData, comment: e.target.value})} placeholder="Interaction remarks..." rows={3} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none" />
             
+            {/* Processing staff dropdown — only shown when processing a To Call item */}
+            {editingId && (
+              <div className="space-y-1">
+                <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Processed By</label>
+                <select value={formData.staff_name} onChange={e => setFormData({...formData, staff_name: e.target.value})}
+                  className="w-full px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-orange-100 uppercase">
+                  {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </div>
+            )}
+
             <button type="submit" disabled={isSaving} className={`w-full py-4 ${editingId ? 'bg-orange-600' : 'bg-blue-700'} text-white rounded-2xl font-black uppercase tracking-widest shadow-lg text-[10px]`}>
               {isSaving ? 'Saving...' : editingId ? 'Update Record' : 'Save Entry'}
             </button>
-            {editingId && <button type="button" onClick={resetForm} className="w-full text-[9px] font-black text-gray-400 uppercase text-center mt-2">Cancel / Clear</button>}
+
+            {/* Extra actions when processing */}
+            {editingId && (
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <button type="button" disabled={isSaving}
+                  onClick={async () => {
+                    const log = { ...formData, id: editingId, staff_name: formData.staff_name };
+                    await promoteToFollowUp(log);
+                    resetForm();
+                  }}
+                  className="py-3 bg-green-50 hover:bg-green-600 text-green-600 hover:text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all border border-green-100 flex items-center justify-center gap-1">
+                  <SafeIcon icon={FiUserPlus} className="text-xs" /> Promote
+                </button>
+                <button type="button" disabled={isSaving}
+                  onClick={async () => {
+                    const now = new Date().toISOString();
+                    await supabase.from('daily_call_logs_2024').update({
+                      status: 'Not Answered',
+                      comment: (formData.comment || '') + ' [CLOSED]',
+                      staff_name: formData.staff_name,
+                      updated_at: now,
+                    }).eq('id', editingId);
+                    resetForm();
+                    fetchLogs();
+                  }}
+                  className="py-3 bg-red-50 hover:bg-red-600 text-red-500 hover:text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all border border-red-100 flex items-center justify-center gap-1">
+                  <SafeIcon icon={FiXCircle} className="text-xs" /> Close Lead
+                </button>
+              </div>
+            )}
+
+            {editingId && <button type="button" onClick={resetForm} className="w-full text-[9px] font-black text-gray-400 uppercase text-center mt-1">Cancel / Clear</button>}
           </form>
         </div>
       </div>
@@ -297,8 +426,10 @@ const CallLogModule = () => {
                             <span className="text-[8px] font-bold text-gray-400">{log.phone_number}</span>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-[8px] font-black text-indigo-600 uppercase">{new Date(log.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                        <div className="text-right space-y-0.5">
+                          <div className="text-[9px] font-black text-indigo-600 uppercase">{new Date(log.updated_at || log.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                          <div className="text-[7px] font-black text-gray-400 uppercase">{new Date(log.updated_at || log.created_at).toLocaleDateString('en-PH', {month:'short', day:'numeric', year:'numeric'})}</div>
+                          <div className="text-[7px] font-black text-blue-500 uppercase">BY {log.staff_name}</div>
                         </div>
                       </div>
                       <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-2">{log.reason}</div>

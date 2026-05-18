@@ -3,7 +3,7 @@ import {
   FiAnchor, FiPlus, FiSearch, FiEdit, FiTrash2, FiSave, FiX, 
   FiTruck, FiDollarSign, FiCalendar, FiCheckCircle, FiAlertCircle, 
   FiBox, FiList, FiFileText, FiRefreshCw, FiClock, FiChevronRight,
-  FiActivity
+  FiActivity, FiChevronLeft
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
@@ -14,6 +14,7 @@ const ShipmentModule = () => {
   const [listLoading, setListLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const detailRef = React.useRef(null);
   const [selectedShipment, setSelectedShipment] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -34,15 +35,33 @@ const ShipmentModule = () => {
   const fetchShipments = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const { data, error } = await supabase
+      // Fetch headers
+      const { data: headers, error } = await supabase
         .from('shipment_headers_20240218')
-        .select(`
-          *,
-          units:shipment_units_20240218(*)
-        `)
+        .select('*')
         .order('soa_date', { ascending: false });
 
       if (error) throw error;
+
+      // Fetch all units separately (PocketBase adapter doesn't support joins)
+      const { data: allUnits } = await supabase
+        .from('shipment_units_20240218')
+        .select('*');
+
+      // Match units to their headers
+      // shipment_id can be: PB short id, Supabase UUID, or supabase_id of header
+      const data = (headers || []).map(header => {
+        const units = (allUnits || []).filter(u => {
+          const sid = u.shipment_id || '';
+          return (
+            sid === header.id ||                    // PB short id match
+            sid === header.supabase_id ||           // Supabase UUID match
+            (header.supabase_id && sid === header.supabase_id)
+          );
+        });
+        return { ...header, units };
+      });
+
       setShipments(data || []);
       
       if (selectedShipment) {
@@ -61,6 +80,11 @@ const ShipmentModule = () => {
   }, []);
 
   const handleSelectShipment = (s) => {
+    setTimeout(() => {
+      if (detailRef.current && window.innerWidth < 1024) {
+        detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
     setListLoading(true);
     setSelectedShipment(s);
     // Visual feedback delay
@@ -165,10 +189,10 @@ const ShipmentModule = () => {
   );
 
   return (
-    <div className="flex flex-col lg:flex-row gap-8 min-h-[600px]">
+    <div className="flex flex-col lg:flex-row gap-4">
       <div className="flex-1 space-y-6 relative">
         {/* HEADER SECTION */}
-        <div className="bg-white p-6 lg:p-8 rounded-[32px] shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-6">
+        <div className="bg-white p-4 lg:p-8 rounded-[24px] lg:rounded-[32px] shadow-sm border border-gray-100 flex flex-col gap-3">
           <div>
             <h2 className="text-xl lg:text-3xl font-black text-gray-900 flex items-center gap-3 uppercase tracking-tighter">
               <div className="bg-indigo-600 p-2.5 rounded-xl text-white shadow-lg shadow-indigo-100">
@@ -178,7 +202,7 @@ const ShipmentModule = () => {
             </h2>
             <p className="text-[9px] text-gray-400 font-black uppercase tracking-[0.2em] mt-1.5 ml-1">GT International Logistics</p>
           </div>
-          <div className="flex gap-2 w-full md:w-auto">
+          <div className="flex gap-2 w-full">
             <div className="relative flex-1 md:w-64">
               <SafeIcon icon={FiSearch} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
               <input 
@@ -207,8 +231,42 @@ const ShipmentModule = () => {
             </div>
           )}
           
-          <div className="overflow-x-auto">
-            <table className="w-full text-left min-w-[900px]">
+          {/* Mobile card view */}
+          <div className="lg:hidden divide-y divide-gray-50">
+            {loading ? (
+              <div className="p-12 text-center text-[10px] font-black uppercase text-gray-400 tracking-widest">Loading...</div>
+            ) : filteredShipments.length > 0 ? filteredShipments.map(s => (
+              <div key={s.id} onClick={() => handleSelectShipment(s)}
+                className={`p-4 cursor-pointer transition-all ${selectedShipment?.id === s.id ? 'bg-indigo-50 border-l-4 border-indigo-600' : 'hover:bg-indigo-50/30'}`}>
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <div className="text-[13px] font-black text-gray-900 uppercase">{s.bl_no}</div>
+                    <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{s.vessel_name} • Voyage {s.voyage_no}</div>
+                    <div className="text-[8px] text-gray-400 font-bold uppercase">{s.soa_date}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-black text-[13px] text-gray-900">₱{new Intl.NumberFormat().format(s.amount_php)}</div>
+                    <div className="text-[8px] text-gray-400 uppercase">{s.units?.length || 0} Chassis</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase ${s.is_paid ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                    {s.is_paid ? 'PAID' : 'UNPAID'}
+                  </span>
+                  {s.is_paid && s.payment_date && (
+                    <span className="text-[8px] font-black text-green-700 bg-green-50 px-2 py-0.5 rounded-lg">{s.payment_date}</span>
+                  )}
+                  <span className="text-[8px] text-gray-400 font-bold uppercase">{s.kgs?.toLocaleString()} KG / {s.cbm?.toLocaleString()} CBM</span>
+                </div>
+              </div>
+            )) : (
+              <div className="p-12 text-center text-[10px] font-black uppercase text-gray-300 tracking-widest">Registry is Empty</div>
+            )}
+          </div>
+
+          {/* Desktop table view */}
+          <div className="hidden lg:block overflow-x-auto">
+            <table className="w-full text-left min-w-[600px]">
               <thead className="bg-gray-50 border-b text-[9px] font-black text-gray-400 uppercase tracking-widest">
                 <tr>
                   <th className="px-8 py-6">Status & B/L</th>
@@ -219,47 +277,39 @@ const ShipmentModule = () => {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr>
-                    <td colSpan="4" className="p-32 text-center">
-                      <FiRefreshCw className="animate-spin text-4xl text-indigo-400 mx-auto mb-4" />
-                      <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Accessing Registry...</span>
+                  <tr><td colSpan="4" className="p-32 text-center">
+                    <FiRefreshCw className="animate-spin text-4xl text-indigo-400 mx-auto mb-4" />
+                    <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Accessing Registry...</span>
+                  </td></tr>
+                ) : filteredShipments.length > 0 ? filteredShipments.map(s => (
+                  <tr key={s.id} onClick={() => handleSelectShipment(s)}
+                    className={`hover:bg-indigo-50/50 transition-all cursor-pointer group ${selectedShipment?.id === s.id ? 'bg-indigo-50/80 border-l-4 border-indigo-600' : ''}`}>
+                    <td className="px-8 py-7">
+                      <div className="text-[12px] font-black text-gray-900 uppercase tracking-tight">{s.bl_no}</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className={`text-[9px] font-black px-3 py-1 rounded-full uppercase ${s.is_paid ? 'bg-green-100 text-green-600 border border-green-200' : 'bg-red-100 text-red-600 border border-red-200'}`}>
+                          {s.is_paid ? 'PAID' : 'UNPAID'}
+                        </span>
+                        {s.is_paid && s.payment_date && (
+                          <span className="text-[9px] font-black text-green-700 bg-green-50 px-2 py-1 rounded-lg border border-green-100">{s.payment_date}</span>
+                        )}
+                      </div>
                     </td>
-                  </tr>
-                ) : filteredShipments.length > 0 ? (
-                  filteredShipments.map(s => (
-                    <tr 
-                      key={s.id} 
-                      onClick={() => handleSelectShipment(s)}
-                      className={`hover:bg-indigo-50/50 transition-all cursor-pointer group ${selectedShipment?.id === s.id ? 'bg-indigo-50/80 border-l-4 border-indigo-600' : ''}`}
-                    >
-                      <td className="px-8 py-7">
-                        <div className="text-[12px] font-black text-gray-900 uppercase tracking-tight">{s.bl_no}</div>
-                        <div className={`mt-2 flex items-center gap-2`}>
-                          <span className={`text-[9px] font-black px-3 py-1 rounded-full uppercase ${s.is_paid ? 'bg-green-100 text-green-600 border border-green-200' : 'bg-red-100 text-red-600 border border-red-200'}`}>
-                            {s.is_paid ? 'PAID' : 'UNPAID'}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-8 py-7">
-                        <div className="text-[11px] font-black text-indigo-700 uppercase tracking-wider">{s.vessel_name}</div>
-                        <div className="text-[9px] font-bold text-gray-400 uppercase mt-1">Voyage {s.voyage_no} • {s.soa_date}</div>
-                      </td>
-                      <td className="px-8 py-7">
-                        <div className="text-[10px] font-black text-gray-600 uppercase mb-1">{s.units?.length || 0} Chassis</div>
-                        <div className="text-[8px] font-bold text-gray-400 uppercase">{s.kgs?.toLocaleString() || 0} KG / {s.cbm?.toLocaleString() || 0} CBM</div>
-                      </td>
-                      <td className="px-8 py-7 text-right font-black text-[15px] text-gray-900">
-                        ₱{new Intl.NumberFormat().format(s.amount_php)}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan="4" className="p-32 text-center">
-                      <SafeIcon icon={FiFileText} className="text-5xl text-gray-100 mx-auto mb-4" />
-                      <p className="text-[10px] font-black uppercase text-gray-300 tracking-[0.2em]">Registry is Empty</p>
+                    <td className="px-8 py-7">
+                      <div className="text-[11px] font-black text-indigo-700 uppercase tracking-wider">{s.vessel_name}</div>
+                      <div className="text-[9px] font-bold text-gray-400 uppercase mt-1">Voyage {s.voyage_no} • {s.soa_date}</div>
                     </td>
+                    <td className="px-8 py-7">
+                      <div className="text-[10px] font-black text-gray-600 uppercase mb-1">{s.units?.length || 0} Chassis</div>
+                      <div className="text-[8px] font-bold text-gray-400 uppercase">{s.kgs?.toLocaleString() || 0} KG / {s.cbm?.toLocaleString() || 0} CBM</div>
+                    </td>
+                    <td className="px-8 py-7 text-right font-black text-[15px] text-gray-900">₱{new Intl.NumberFormat().format(s.amount_php)}</td>
                   </tr>
+                )) : (
+                  <tr><td colSpan="4" className="p-32 text-center">
+                    <SafeIcon icon={FiFileText} className="text-5xl text-gray-100 mx-auto mb-4" />
+                    <p className="text-[10px] font-black uppercase text-gray-300 tracking-[0.2em]">Registry is Empty</p>
+                  </td></tr>
                 )}
               </tbody>
             </table>
@@ -268,11 +318,11 @@ const ShipmentModule = () => {
       </div>
 
       {/* DETAIL SIDEBAR */}
-      <div className="w-full lg:w-[480px] shrink-0">
+      <div ref={detailRef} className={`${selectedShipment ? "block" : "hidden lg:block"} w-full lg:w-[480px] shrink-0`}>
         {selectedShipment ? (
-          <div className="bg-white rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden sticky top-8 animate-in slide-in-from-right-8 duration-500">
+          <div className="bg-white rounded-[24px] lg:rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden lg:sticky lg:top-8 animate-in slide-in-from-bottom-8 lg:slide-in-from-right-8 duration-500">
             <div className={`p-10 text-white ${selectedShipment.is_paid ? 'bg-green-600' : 'bg-gray-900'}`}>
-              <div className="flex justify-between items-start mb-8">
+              <div className="flex justify-between items-start mb-4">
                 <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-md shadow-lg">
                   <SafeIcon icon={FiBox} className="text-3xl" />
                 </div>
@@ -291,7 +341,7 @@ const ShipmentModule = () => {
                   ><SafeIcon icon={FiTrash2} title="Delete" /></button>
                 </div>
               </div>
-              <h3 className="text-3xl font-black uppercase tracking-tight mb-2 leading-none">{selectedShipment.bl_no}</h3>
+              <h3 className="text-xl lg:text-3xl font-black uppercase tracking-tight mb-2 leading-none break-all">{selectedShipment.bl_no}</h3>
               <div className="flex items-center gap-3 mt-4">
                 <span className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-3 py-1 rounded-lg">
                   {selectedShipment.is_paid ? 'SETTLED' : 'OUTSTANDING'}
@@ -300,7 +350,7 @@ const ShipmentModule = () => {
               </div>
             </div>
 
-            <div className="p-8 space-y-6 max-h-[50vh] overflow-y-auto no-scrollbar bg-gray-50/20">
+            <div className="p-4 lg:p-8 space-y-4 max-h-[50vh] overflow-y-auto no-scrollbar bg-gray-50/20">
               <div className="flex items-center justify-between border-b border-gray-100 pb-4 mb-4">
                 <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Inventory Details</span>
                 <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 px-3 py-1 rounded-full uppercase">{selectedShipment.units?.length || 0} Units</span>
@@ -320,19 +370,20 @@ const ShipmentModule = () => {
               <div className="flex justify-between items-end">
                 <div>
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-60 block mb-2">Total Valuation</span>
-                  <p className="text-4xl font-black tracking-tighter">₱{new Intl.NumberFormat().format(selectedShipment.amount_php)}</p>
+                  <p className="text-2xl lg:text-4xl font-black tracking-tighter">₱{new Intl.NumberFormat().format(selectedShipment.amount_php)}</p>
                 </div>
                 <button 
                   onClick={() => setSelectedShipment(null)}
-                  className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-xl border border-white/20 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all"
+                  className="p-2.5 bg-white/10 hover:bg-white/20 rounded-xl border border-white/20 flex items-center gap-2 transition-all"
                 >
-                  <SafeIcon icon={FiX} /> Close Window
+                  <SafeIcon icon={FiX} />
+                  <span className="hidden lg:inline text-[10px] font-black uppercase tracking-widest">Close</span>
                 </button>
               </div>
             </div>
           </div>
         ) : (
-          <div className="h-[600px] flex flex-col items-center justify-center bg-white rounded-[40px] border-2 border-dashed border-gray-100 p-12 text-center">
+          <div className="hidden lg:flex h-[400px] flex-col items-center justify-center bg-white rounded-[40px] border-2 border-dashed border-gray-100 p-12 text-center">
             <SafeIcon icon={FiAnchor} className="text-6xl text-gray-200 mb-6" />
             <h3 className="text-xl font-black text-gray-900 uppercase tracking-tight">Registry Clean</h3>
             <p className="text-[10px] text-gray-400 font-black uppercase mt-3 leading-relaxed max-w-[200px]">Select a manifest record to view detailed chassis breakdown and payment history.</p>

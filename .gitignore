@@ -22,4 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.env.env
+.env.local
 .env
+.env.*
+package-lock.json
+payment-calculator-philippines@0.1.0
+vite
+dist/
