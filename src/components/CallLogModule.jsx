@@ -391,7 +391,7 @@ const CallLogModule = () => {
       </div>
 
       {/* COLUMN 3: CALL HISTORY */}
-      <div className="w-full xl:w-[420px] shrink-0 flex flex-col h-full">
+      <div className="w-full xl:w-[420px] shrink-0 flex flex-col">
         <div className="bg-white rounded-[32px] shadow-sm border border-gray-100 flex flex-col h-full overflow-hidden">
           <div className="px-6 py-5 border-b space-y-4 bg-gray-50">
             <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em] flex items-center gap-2">
@@ -408,7 +408,7 @@ const CallLogModule = () => {
               />
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-8 no-scrollbar">
+          <div className="overflow-y-auto p-4 space-y-8 no-scrollbar max-h-[60vh] xl:max-h-[calc(100vh-220px)]">
             {Object.keys(historyGroups).length > 0 ? (
               Object.entries(historyGroups).map(([date, items]) => (
                 <div key={date} className="space-y-3">

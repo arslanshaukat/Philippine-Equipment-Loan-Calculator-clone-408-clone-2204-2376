@@ -353,7 +353,7 @@ const CalendarModule = () => {
                     <DetailSectionLabel icon={FiTruck} text="Unit Performance Specs" />
                     <div className="grid grid-cols-2 gap-4 mt-6">
                       <SpecBox label="Make / Brand" val={selectedDetail.make} icon={FiTag} />
-                      <SpecBox label="Model Code" val={selectedDetail.model} icon={FiArchive} />
+                      <SpecBox label="Type" val={selectedDetail.model} icon={FiArchive} />
                       <SpecBox label="Body Type" val={selectedDetail.body_type || 'STANDARD'} icon={FiArchive} />
                       <SpecBox label="Engine #" val={selectedDetail.unit_engine || 'N/A'} icon={FiCpu} />
                     </div>
@@ -464,7 +464,17 @@ const CalendarModule = () => {
                   <SectionLabel icon={FiTruck} text="Technical Specifications" />
                   <div className="grid grid-cols-2 gap-4">
                     <FormInput label="Make (Brand)" value={formData.make} onChange={e => setFormData({ ...formData, make: e.target.value })} required />
-                    <FormInput label="Model Code" value={formData.model} onChange={e => setFormData({ ...formData, model: e.target.value })} />
+                    <div className="space-y-1">
+                    <label className="block text-[9px] font-black text-gray-400 uppercase mb-1 ml-1">Type</label>
+                    <select value={formData.model} onChange={e => setFormData({ ...formData, model: e.target.value })}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-2xl text-[11px] font-bold outline-none focus:ring-2 focus:ring-blue-100 uppercase">
+                      <option value="">— Select —</option>
+                      <option value="6 WHEELER">6 Wheeler</option>
+                      <option value="10 WHEELER">10 Wheeler</option>
+                      <option value="12 WHEELER">12 Wheeler</option>
+                      <option value="CRAWLER">Crawler</option>
+                    </select>
+                  </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <FormInput label="Body Type" placeholder="E.G. DUMP/WINGVAN" value={formData.body_type} onChange={e => setFormData({ ...formData, body_type: e.target.value })} />
@@ -691,7 +701,7 @@ const InquiryCard = ({ item, onView, onEdit, onDelete }) => {
         <div className="grid grid-cols-2 gap-2 mb-3">
           <DetailMini icon={FiTruck} label="Brand" val={item.make} />
           <DetailMini icon={FiArchive} label="Body" val={item.body_type || 'STD'} />
-          <DetailMini icon={FiArchive} label="Model" val={item.model} />
+          <DetailMini icon={FiArchive} label="Type" val={item.model} />
           <DetailMini icon={FiCpu} label="Engine #" val={item.unit_engine || 'STD'} />
         </div>
 

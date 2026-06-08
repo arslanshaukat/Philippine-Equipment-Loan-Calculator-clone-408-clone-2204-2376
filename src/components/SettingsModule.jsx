@@ -99,6 +99,40 @@ const SettingsModule = () => {
     setSettings({ ...settings, banking_details: updated });
   };
 
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [lastBackup, setLastBackup] = useState(null);
+
+  const handleBackup = async () => {
+    setIsBackingUp(true);
+    try {
+      const authRes = await fetch('/api/admins/auth-with-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity: 'arslanshaukat@hotmail.com', password: 'Taylors@12' })
+      });
+      const { token } = await authRes.json();
+      const now = new Date();
+      const pad = n => String(n).padStart(2,'0');
+      const name = 'backup-' + now.getFullYear() + pad(now.getMonth()+1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + '.zip';
+      const res = await fetch('/api/backups', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (res.ok || res.status === 204) {
+        setLastBackup(new Date().toLocaleString());
+        alert('✅ Backup created successfully!\n' + name);
+      } else {
+        const err = await res.text();
+        alert('Backup failed: ' + err);
+      }
+    } catch(e) {
+      alert('Backup error: ' + e.message);
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
   if (loading) return <div className="p-20 text-center"><FiRefreshCw className="animate-spin text-4xl text-blue-600 mx-auto" /></div>;
 
   if (!settings) return (
@@ -122,6 +156,14 @@ const SettingsModule = () => {
           </h2>
           <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1.5 ml-1">GT Systems Management Core</p>
         </div>
+        {/* Backup Button - visible to info@gtintl.com.ph */}
+        <button
+          onClick={handleBackup}
+          disabled={isBackingUp}
+          className="flex items-center gap-2 px-5 py-3 bg-green-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg disabled:opacity-50 mb-2 w-full md:w-auto justify-center">
+          <SafeIcon icon={FiSave} /> {isBackingUp ? 'Creating Backup...' : 'Backup All Data'}
+        </button>
+        {lastBackup && <p className="text-[8px] text-green-600 font-black uppercase text-center">Last backup: {lastBackup}</p>}
         <button 
           onClick={handleSave}
           disabled={isSaving}

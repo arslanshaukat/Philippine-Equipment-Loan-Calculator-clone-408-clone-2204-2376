@@ -306,8 +306,24 @@ const PaymentCalculator = () => {
         <p className="font-bold text-gray-700 mb-1 uppercase tracking-wider">GT International Inc</p>
         <p>D2A Industrial Lot 37B, 4th St Extension, Industrial District, THEP, SBFZ Tipo</p>
         <p>Subic Bay Freeport Zone, 2200 Zambales, Philippines</p>
-        
-        <div className="mt-8 flex justify-center">
+
+        {/* Accredited Financing Partners */}
+        <div className="mt-8 mb-6">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-4">Accredited Financing Partners</p>
+          <div className="flex items-center justify-center gap-6 sm:gap-8 flex-wrap">
+            <div className="flex flex-col items-center gap-2">
+              <img src="/logo-orix.png" alt="ORIX Metro" className="h-8 sm:h-12 w-auto object-contain grayscale hover:grayscale-0 transition-all duration-300" />
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <img src="/logo-chailease.png" alt="Chailease Berjaya" className="h-8 sm:h-12 w-auto object-contain grayscale hover:grayscale-0 transition-all duration-300" />
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <img src="/logo-pen-asia.jpg" alt="Pen Asia Marketing" className="h-8 sm:h-12 w-auto object-contain grayscale hover:grayscale-0 transition-all duration-300" />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-center">
           <Link to="/admin" className="flex items-center gap-2 text-gray-400 hover:text-blue-600 transition-colors group">
             <SafeIcon icon={FiSettings} className="group-hover:rotate-90 transition-transform duration-500" />
             <span>Staff Login</span>

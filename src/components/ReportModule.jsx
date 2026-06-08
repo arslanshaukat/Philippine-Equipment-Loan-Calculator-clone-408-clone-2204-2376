@@ -81,6 +81,7 @@ export default function ReportModule() {
   const [quotes, setQuotes] = useState([]);
   const [prices, setPrices] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
+  const [applicants, setApplicants] = useState([]);
 
   const dateRange = useMemo(() => {
     if (preset === 'Custom' && customFrom && customTo) {
@@ -97,13 +98,14 @@ export default function ReportModule() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [c, f, cr, q, p, a] = await Promise.all([
+      const [c, f, cr, q, p, a, ap] = await Promise.all([
         supabase.from('daily_call_logs_2024').select('*').order('created_at', { ascending: false }),
         supabase.from('follow_ups_2024').select('*').order('last_contacted_at', { ascending: false }),
         supabase.from('visit_schedules_2024').select('*').order('created_at', { ascending: false }),
         supabase.from('quotations_20240522').select('*').order('created_at', { ascending: false }),
         supabase.from('price_list_2024').select('*').order('created_at', { ascending: false }),
         supabase.from('activity_log').select('*').order('timestamp', { ascending: false }),
+        supabase.from('applicants').select('*').order('date_applied', { ascending: false }),
       ]);
       setCalls(c.data || []);
       setFollows(f.data || []);
@@ -111,6 +113,7 @@ export default function ReportModule() {
       setQuotes(q.data || []);
       setPrices(p.data || []);
       setActivityLogs(a.data || []);
+      setApplicants(ap.data || []);
     } catch(e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -166,6 +169,7 @@ export default function ReportModule() {
     { id: 'quotes', label: 'Quotes', icon: FiList },
     { id: 'prices', label: 'Price List', icon: FiTag },
     { id: 'overdue', label: 'Attention Required', icon: FiAlertCircle },
+    { id: 'hiring', label: 'Hiring', icon: FiUsers },
   ];
 
   return (
@@ -362,6 +366,43 @@ export default function ReportModule() {
               ])}
             />
           </Section>
+        )}
+
+        {!loading && activeSection === 'hiring' && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <Stat label="Total Applicants" value={applicants.length} icon={FiUsers} color="indigo" />
+              <Stat label="For Interview" value={applicants.filter(a=>a.status==='For Interview').length} icon={FiCalendar} color="blue" />
+              <Stat label="Hired" value={applicants.filter(a=>a.status==='Hired').length} icon={FiCheckCircle} color="green" />
+              <Stat label="Rejected" value={applicants.filter(a=>a.status==='Rejected').length} icon={FiXCircle} color="red" />
+            </div>
+            <Section title="Applicants Registry" icon={FiUsers}>
+              <Table
+                headers={['Date Applied', 'Staff', 'Name', 'Role', 'City', 'Status', 'Interview', 'Asking', 'Offered']}
+                rows={applicants.map(a => [
+                  a.date_applied || '—',
+                  a.handled_by || '—',
+                  a.full_name,
+                  a.job_role || '—',
+                  a.city || '—',
+                  <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase ${a.status==='Hired'?'bg-green-100 text-green-700':a.status==='Rejected'?'bg-red-100 text-red-600':'bg-blue-100 text-blue-700'}`}>{a.status}</span>,
+                  a.interview_response || '—',
+                  a.asking_salary ? '₱'+new Intl.NumberFormat().format(a.asking_salary) : '—',
+                  a.offered_salary ? '₱'+new Intl.NumberFormat().format(a.offered_salary) : '—',
+                ])}
+              />
+            </Section>
+            <Section title="Hiring Activity Log" icon={FiActivity}>
+              <Table
+                headers={['Time', 'Staff', 'Action', 'Details']}
+                rows={fLogs.filter(l => l.module === 'Hiring').map(l => [
+                  new Date(l.timestamp).toLocaleString('en-PH', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}),
+                  l.staff, l.action,
+                  typeof l.details === 'object' ? Object.entries(l.details).map(([k,v]) => `${k}: ${v}`).join(' | ') : String(l.details || '')
+                ])}
+              />
+            </Section>
+          </>
         )}
 
         {!loading && activeSection === 'overdue' && (

@@ -11,7 +11,11 @@ import SafeIcon from '../common/SafeIcon';
 const FollowUpModule = () => {
   const [followUps, setFollowUps] = useState([]);
   const [soldUnits, setSoldUnits] = useState([]);
+  const [applicants, setApplicants] = useState([]);
   const [selectedSoldUnit, setSelectedSoldUnit] = useState(null);
+  const [selectedHiringApplicant, setSelectedHiringApplicant] = useState(null);
+  const [hiringNote, setHiringNote] = useState('');
+  const [isSavingHiringNote, setIsSavingHiringNote] = useState(false);
   const [soldNote, setSoldNote] = useState('');
   const [isSavingSoldNote, setIsSavingSoldNote] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,6 +29,10 @@ const FollowUpModule = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [editingLog, setEditingLog] = useState(null); // {index, comment}
   const [includeClosedInSearch, setIncludeClosedInSearch] = useState(false);
+  const [activityDate, setActivityDate] = useState(new Date().toISOString().split('T')[0]);
+  const [managerNotes, setManagerNotes] = useState({}); // { item_id: note }
+  const [managerDates, setManagerDates] = useState({}); // { item_id: date }
+  const [savingNote, setSavingNote] = useState(null);
 
   const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
 
@@ -49,6 +57,66 @@ const FollowUpModule = () => {
       setSoldNote('');
     } catch(e) { alert(e.message); }
     finally { setIsSavingSoldNote(false); }
+  };
+
+  const handleManagerNote = async (itemId, note) => {
+    if (!note.trim()) return;
+    setSavingNote(itemId);
+    try {
+      const item = followUps.find(f => f.id === itemId);
+      if (!item) return;
+      const assignedDate = managerDates[itemId] || '';
+      const entry = {
+        date: new Date().toLocaleString(),
+        comment: '📌 MANAGER NOTE: ' + note.toUpperCase() + (assignedDate ? ' — CALL BY: ' + assignedDate : ''),
+        staff: 'ARSLAN',
+        action: 'Manager Note',
+      };
+      const updatedHistory = [entry, ...(item.history || [])];
+      const updatePayload = {
+        history: updatedHistory,
+        last_contacted_at: new Date().toISOString(),
+      };
+      if (assignedDate) updatePayload.next_follow_up = assignedDate;
+      await supabase.from('follow_ups_2024').update(updatePayload).eq('id', itemId);
+      fetchFollowUps();
+      setManagerNotes(prev => ({ ...prev, [itemId]: '' }));
+      setManagerDates(prev => ({ ...prev, [itemId]: '' }));
+    } catch(e) { alert(e.message); }
+    finally { setSavingNote(null); }
+  };
+
+  const handleHiringNote = async (action) => {
+    if (!hiringNote.trim() || !selectedStaff) return;
+    setIsSavingHiringNote(true);
+    try {
+      const entry = {
+        date: new Date().toLocaleString(),
+        comment: hiringNote.toUpperCase(),
+        staff: selectedStaff,
+        action: action || 'Note',
+      };
+      const updatedHistory = [entry, ...(selectedHiringApplicant.history || [])];
+      await supabase.from('applicants').update({ history: updatedHistory }).eq('id', selectedHiringApplicant.id);
+      setSelectedHiringApplicant(prev => ({ ...prev, history: updatedHistory }));
+      fetchApplicants();
+      setHiringNote('');
+    } catch(e) { alert(e.message); }
+    finally { setIsSavingHiringNote(false); }
+  };
+
+  const updateHiringStatus = async (id, field, value) => {
+    await supabase.from('applicants').update({ [field]: value }).eq('id', id);
+    setSelectedHiringApplicant(prev => ({ ...prev, [field]: value }));
+    fetchApplicants();
+  };
+
+  const fetchApplicants = async () => {
+    try {
+      const { data } = await supabase.from('applicants').select('*');
+      // Only show applicants with future available_date or interview scheduled
+      setApplicants(data || []);
+    } catch(e) { console.error(e); }
   };
 
   const fetchSoldUnits = async () => {
@@ -78,6 +146,7 @@ const FollowUpModule = () => {
   useEffect(() => {
     fetchFollowUps();
     fetchSoldUnits();
+    fetchApplicants();
   }, []);
 
   const today = new Date().toISOString().split('T')[0];
@@ -105,6 +174,58 @@ const FollowUpModule = () => {
       }
     });
   }, [followUps, searchTerm, activeTab, today, includeClosedInSearch]);
+
+  // Activity log - grouped by customer for a given date
+  const activityLog = useMemo(() => {
+    const grouped = {};
+    followUps.forEach(item => {
+      const dayEntries = (item.history || []).filter(log => {
+        if (!log.date) return false;
+        try {
+          const logDate = new Date(log.date).toISOString().split('T')[0];
+          return logDate === activityDate;
+        } catch { return false; }
+      });
+      if (dayEntries.length === 0) return;
+      const key = item.id;
+      if (!grouped[key]) {
+        grouped[key] = {
+          customer_name: item.customer_name,
+          phone_number: item.phone_number,
+          item_id: item.id,
+          temperature: item.temperature,
+          status: item.status,
+          entries: [],
+        };
+      }
+      grouped[key].entries.push(...dayEntries);
+    });
+    // Sort each customer's entries newest first, then sort customers by latest action
+    return Object.values(grouped).map(g => ({
+      ...g,
+      entries: g.entries.sort((a, b) => new Date(b.date) - new Date(a.date)),
+    })).sort((a, b) => new Date(b.entries[0]?.date) - new Date(a.entries[0]?.date));
+  }, [followUps, activityDate]);
+
+  const filteredApplicants = useMemo(() => {
+    const s = searchTerm.toLowerCase();
+    if (activeTab === 'Hiring') {
+      return applicants.filter(a => {
+        if (a.status === 'Hired' || a.status === 'Rejected') return false;
+        return !s || a.full_name?.toLowerCase().includes(s) || a.phone?.includes(s) || a.job_role?.toLowerCase().includes(s);
+      });
+    }
+    if (activeTab !== 'Due' && activeTab !== 'Upcoming' && activeTab !== 'All') return [];
+    return applicants.filter(a => {
+      if (!a.follow_up_date) return false;
+      if (a.status === 'Hired' || a.status === 'Rejected') return false;
+      const matchSearch = !s || a.full_name?.toLowerCase().includes(s) || a.phone?.includes(s);
+      if (!matchSearch) return false;
+      if (activeTab === 'Due') return a.follow_up_date <= today;
+      if (activeTab === 'Upcoming') return a.follow_up_date > today;
+      return true;
+    });
+  }, [applicants, searchTerm, activeTab, today]);
 
   const filteredSoldUnits = useMemo(() => {
     if (activeTab !== 'Due' && activeTab !== 'Upcoming' && activeTab !== 'All') return [];
@@ -315,6 +436,8 @@ const FollowUpModule = () => {
             <SidebarNavBtn active={activeTab==='Hot'} onClick={()=>{setActiveTab('Hot');setSelectedSoldUnit(null);}} icon={FiZap} label="Hot Prospects" count={followUps.filter(f => f.temperature === 'Hot' && f.status !== 'Closed').length} color="text-orange-500" />
             <SidebarNavBtn active={activeTab==='Closed'} onClick={()=>{setActiveTab('Closed');setSelectedSoldUnit(null);}} icon={FiArchive} label="Closed Registry" count={followUps.filter(f => f.status === 'Closed').length} color="text-gray-400" />
             <SidebarNavBtn active={activeTab==='All'} onClick={()=>{setActiveTab('All');setSelectedSoldUnit(null);}} icon={FiActivity} label="Full Registry" count={followUps.length} />
+            <SidebarNavBtn active={activeTab==='Activity'} onClick={()=>{setActiveTab('Activity');setSelectedSoldUnit(null);setSelectedItem(null);}} icon={FiClock} label="Activity Log" count={activityLog.length} color="text-purple-500" />
+            <SidebarNavBtn active={activeTab==='Hiring'} onClick={()=>{setActiveTab('Hiring');setSelectedSoldUnit(null);setSelectedItem(null);}} icon={FiUser} label="Hiring" count={applicants.filter(a=>a.follow_up_date && a.status !== 'Hired' && a.status !== 'Rejected').length} color="text-purple-600" />
             </div>
           </div>
 
@@ -324,13 +447,143 @@ const FollowUpModule = () => {
 
       </div>
 
-      <div className={`${(selectedItem || selectedSoldUnit) ? "hidden xl:flex" : "flex"} flex-1 bg-white rounded-[32px] xl:rounded-[40px] border shadow-sm border-gray-100 overflow-hidden flex-col`}>
+      <div className={`${(selectedItem || selectedSoldUnit || selectedHiringApplicant) ? "hidden xl:flex" : "flex"} flex-1 bg-white rounded-[32px] xl:rounded-[40px] border shadow-sm border-gray-100 overflow-hidden flex-col`}>
         <div className="px-8 py-6 border-b bg-gray-50/30 flex justify-between items-center">
-          <h2 className="text-sm font-black text-gray-900 uppercase tracking-tight">{activeTab} Registry</h2>
-          <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-4 py-1.5 rounded-full uppercase">{filteredData.length} Records</span>
+          <h2 className="text-sm font-black text-gray-900 uppercase tracking-tight">
+            {activeTab === 'Activity' ? 'Activity Log' : activeTab === 'Hiring' ? 'Hiring Follow-Up' : activeTab + ' Registry'}
+          </h2>
+          <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase">
+            {activeTab === 'Activity' ? activityLog.length + ' Actions' : activeTab === 'Hiring' ? filteredApplicants.length + ' Applicants' : filteredData.length + ' Records'}
+          </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 no-scrollbar bg-gray-50/20">
+        {activeTab === 'Hiring' ? (
+          <div className="overflow-y-auto p-4 no-scrollbar bg-gray-50/20 h-[calc(100vh-320px)] xl:h-[calc(100vh-280px)]">
+            {filteredApplicants.length === 0 ? (
+              <div className="text-center text-gray-300 font-black uppercase text-[10px] py-12 tracking-widest">No active applicants</div>
+            ) : (
+              <div className="space-y-3">
+                {filteredApplicants.map((a, i) => (
+                  <div key={i} onClick={() => { setSelectedHiringApplicant(a); setSelectedItem(null); setSelectedSoldUnit(null); }}
+                    className={`bg-white rounded-[20px] border p-4 shadow-sm cursor-pointer transition-all hover:border-purple-300 hover:shadow-md ${selectedHiringApplicant?.id === a.id ? 'border-purple-500 bg-purple-50/30' : 'border-purple-100'}`}>
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="min-w-0">
+                        <p className="font-black text-gray-900 uppercase text-[11px] truncate">{a.full_name}</p>
+                        <p className="text-[8px] font-bold text-purple-600 uppercase">{a.job_role || '—'}</p>
+                        {a.phone && <p className="text-[8px] text-gray-400 font-bold">{a.phone}</p>}
+                      </div>
+                      <div className="text-right shrink-0 ml-2">
+                        <span className={`text-[7px] font-black px-2 py-0.5 rounded-full uppercase block mb-1 ${a.status==='For Interview'?'bg-blue-100 text-blue-700':a.status==='Screening'?'bg-yellow-100 text-yellow-700':'bg-purple-100 text-purple-700'}`}>{a.status}</span>
+                        {a.follow_up_date && (
+                          <span className={`text-[7px] font-black px-2 py-0.5 rounded-full uppercase ${a.follow_up_date <= today ? 'bg-red-50 text-red-600 animate-pulse' : 'bg-purple-50 text-purple-600'}`}>
+                            {a.follow_up_date <= today ? '⚠ DUE' : a.follow_up_date}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {a.city && <span className="text-[7px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-lg uppercase font-bold">{a.city}</span>}
+                      <span className={`text-[7px] font-black px-2 py-0.5 rounded-lg uppercase ${a.interview_response==='Confirmed'?'bg-green-50 text-green-600':a.interview_response==='No Response'?'bg-red-50 text-red-600':'bg-yellow-50 text-yellow-600'}`}>
+                        Interview: {a.interview_response || 'Pending'}
+                      </span>
+                      {a.asking_salary > 0 && <span className="text-[7px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-lg font-bold">₱{new Intl.NumberFormat().format(a.asking_salary)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'Activity' ? (
+          <div className="overflow-y-auto p-4 no-scrollbar bg-gray-50/20 h-[calc(100vh-320px)] xl:h-[calc(100vh-280px)]">
+            <div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+              <SafeIcon icon={FiCalendar} className="text-indigo-500 shrink-0" />
+              <input type="date" value={activityDate} onChange={e => setActivityDate(e.target.value)}
+                className="flex-1 text-[11px] font-black outline-none bg-transparent" />
+              <button onClick={() => setActivityDate(new Date().toISOString().split('T')[0])}
+                className="text-[8px] font-black text-indigo-600 uppercase tracking-widest bg-indigo-50 px-2 py-1 rounded-lg">Today</button>
+              <span className="text-[8px] font-black bg-indigo-600 text-white px-2 py-1 rounded-lg shrink-0">{activityLog.length}</span>
+            </div>
+            {activityLog.length === 0 ? (
+              <div className="text-center text-gray-300 font-black uppercase text-[10px] py-12 tracking-widest">No activity on this date</div>
+            ) : (
+              <div className="space-y-3">
+                {activityLog.map((group, i) => (
+                  <div key={i} className="bg-white rounded-[20px] border border-gray-100 shadow-sm overflow-hidden cursor-pointer hover:border-indigo-200 transition-all"
+                    onClick={() => {
+                      const item = followUps.find(f => f.id === group.item_id);
+                      if (item) { setSelectedItem(item); setSelectedSoldUnit(null); }
+                    }}>
+                    {/* Customer header */}
+                    <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-b border-gray-100">
+                      <div className="min-w-0">
+                        <p className="font-black text-gray-900 uppercase text-[11px] truncate">{group.customer_name}</p>
+                        <p className="text-[8px] text-gray-400 font-bold">{group.phone_number}</p>
+                        {group.unit_interest && <p className="text-[8px] font-black text-blue-600 uppercase mt-0.5">🚛 {group.unit_interest}</p>}
+                      </div>
+                      <span className="text-[8px] font-black bg-indigo-600 text-white px-2 py-0.5 rounded-lg shrink-0 ml-2">{group.entries.length} action{group.entries.length > 1 ? 's' : ''}</span>
+                    </div>
+                    {/* Entries */}
+                    <div className="divide-y divide-gray-50">
+                      {group.entries.map((log, j) => (
+                        <div key={j} className={`px-4 py-2.5 ${log.staff === 'ARSLAN' ? 'bg-amber-50/50' : ''}`}>
+                          <div className="flex justify-between items-start">
+                            <div className="flex gap-1.5 flex-wrap items-center">
+                              {log.staff === 'ARSLAN' && <span className="text-[7px] font-black px-1.5 py-0.5 rounded-full bg-amber-500 text-white uppercase">👑 MGR</span>}
+                              <span className={`text-[7px] font-black px-1.5 py-0.5 rounded uppercase ${log.action === 'Manager Note' ? 'bg-amber-100 text-amber-700' : log.action === 'Closed' ? 'bg-red-50 text-red-600' : log.action === 'Hot Prospect' ? 'bg-orange-50 text-orange-600' : log.action === 'Call' ? 'bg-blue-50 text-blue-600' : 'bg-indigo-50 text-indigo-600'}`}>{log.action || 'Note'}</span>
+                              {log.attempts && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700">{log.attempts}x</span>}
+                              <span className={`text-[7px] font-black uppercase ${log.staff === 'ARSLAN' ? 'text-amber-600' : 'text-indigo-500'}`}>{log.staff}</span>
+                            </div>
+                            <span className="text-[7px] text-gray-400 font-bold shrink-0 ml-2">{log.date?.split(',')[1]?.trim() || log.date}</span>
+                          </div>
+                          {log.comment && <p className={`text-[9px] font-bold uppercase mt-1 line-clamp-2 ${log.staff === 'ARSLAN' ? 'text-amber-800' : 'text-gray-600'}`}>{log.comment}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    {/* Manager note input - only for ARSLAN */}
+                    {selectedStaff === 'ARSLAN' && (
+                      <div className="px-4 py-3 bg-amber-50 border-t border-amber-100" onClick={e => e.stopPropagation()}>
+                        <p className="text-[7px] font-black text-amber-600 uppercase tracking-widest mb-2">👑 Leave Manager Instruction</p>
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Add instruction for staff..."
+                              value={managerNotes[group.item_id] || ''}
+                              onChange={e => setManagerNotes(prev => ({ ...prev, [group.item_id]: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleManagerNote(group.item_id, managerNotes[group.item_id] || ''); }}
+                              className="flex-1 px-3 py-2 bg-white border border-amber-200 rounded-xl text-[10px] font-bold outline-none focus:ring-2 focus:ring-amber-100 uppercase"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="flex-1 flex items-center gap-2 px-3 py-2 bg-white border border-amber-200 rounded-xl">
+                              <SafeIcon icon={FiCalendar} className="text-amber-500 text-xs shrink-0" />
+                              <input
+                                type="date"
+                                value={managerDates[group.item_id] || ''}
+                                onChange={e => setManagerDates(prev => ({ ...prev, [group.item_id]: e.target.value }))}
+                                className="flex-1 text-[10px] font-bold outline-none bg-transparent text-amber-700"
+                              />
+                            </div>
+                            <button
+                              onClick={() => handleManagerNote(group.item_id, managerNotes[group.item_id] || '')}
+                              disabled={savingNote === group.item_id || !managerNotes[group.item_id]?.trim()}
+                              className="px-3 py-2 bg-amber-500 text-white rounded-xl text-[9px] font-black uppercase disabled:opacity-50 hover:bg-amber-600 transition-all shrink-0">
+                              {savingNote === group.item_id ? '...' : 'Send'}
+                            </button>
+                          </div>
+                          {managerDates[group.item_id] && (
+                            <p className="text-[7px] font-black text-amber-600 uppercase">📅 Will set Due Date to: {managerDates[group.item_id]}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+        <div className="overflow-y-auto p-6 space-y-4 no-scrollbar bg-gray-50/20 max-h-[calc(100vh-220px)]">
           {filteredData.map(item => {
             const hotLog = getMilestoneLog(item.history, 'Hot Prospect');
             const closedLog = getMilestoneLog(item.history, 'Closed');
@@ -357,6 +610,11 @@ const FollowUpModule = () => {
                 <div className="flex items-center justify-between gap-1 mb-1"><h4 className="font-black uppercase text-xs truncate">{item.customer_name}</h4>{item.last_contacted_at && <span className={`text-[7px] font-black px-1.5 py-0.5 rounded shrink-0 ${selectedItem?.id === item.id ? "bg-white/20 text-white/80" : "bg-gray-100 text-gray-500"}`}>{(() => { const h = (item.history || [])[0]; if (h && h.date) { const parts = h.date.split(", "); return parts.length > 1 ? parts[0] + " " + parts[1] : h.date; } return ""; })()}</span>}</div>
                 <div className="flex flex-col gap-1">
                   <p className={`text-[10px] font-bold ${selectedItem?.id === item.id ? 'text-white/70' : 'text-gray-400'}`}>{item.phone_number}</p>
+                  {item.unit_interest && (
+                    <p className={`text-[8px] font-black uppercase truncate mt-0.5 ${selectedItem?.id === item.id ? 'text-yellow-300' : 'text-blue-500'}`}>
+                      🚛 {item.unit_interest}
+                    </p>
+                  )}
                   
                   {/* Milestone display in list */}
                   {activeTab === 'Hot' && hotLog && (
@@ -409,11 +667,106 @@ const FollowUpModule = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
-      <div className={`${(selectedItem || selectedSoldUnit) ? "block" : "hidden xl:block"} w-full xl:w-[500px] shrink-0`}>
-        {selectedSoldUnit ? (
-          <div className="bg-white h-full rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className={`${(selectedItem || selectedSoldUnit || selectedHiringApplicant) ? "block" : "hidden xl:block"} w-full xl:w-[500px] shrink-0`}>
+        {selectedHiringApplicant && !selectedItem && !selectedSoldUnit ? (
+          <div className="bg-white rounded-[32px] xl:rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[90vh] xl:max-h-[calc(100vh-120px)] sticky top-4">
+            {/* Header */}
+            <div className="bg-purple-700 px-6 py-6 text-white shrink-0">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[8px] font-black bg-white/20 px-2 py-1 rounded-lg uppercase">{selectedHiringApplicant.status}</span>
+                <button onClick={() => setSelectedHiringApplicant(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20"><SafeIcon icon={FiX} /></button>
+              </div>
+              <h3 className="text-xl font-black uppercase">{selectedHiringApplicant.full_name}</h3>
+              <p className="text-purple-200 text-[10px] font-bold uppercase mt-1">{selectedHiringApplicant.job_role}</p>
+              <div className="flex flex-wrap gap-3 mt-2 text-[8px] text-white/50 font-bold">
+                {selectedHiringApplicant.phone && <span>{selectedHiringApplicant.phone}</span>}
+                {selectedHiringApplicant.city && <span>{selectedHiringApplicant.city}</span>}
+                {selectedHiringApplicant.follow_up_date && <span>Follow-up: {selectedHiringApplicant.follow_up_date}</span>}
+              </div>
+            </div>
+
+            {/* Quick updates */}
+            <div className="flex divide-x divide-gray-100 border-b shrink-0">
+              <div className="flex-1 p-3">
+                <p className="text-[7px] font-black text-gray-400 uppercase mb-1">Status</p>
+                <select value={selectedHiringApplicant.status}
+                  onChange={e => updateHiringStatus(selectedHiringApplicant.id, 'status', e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-50 border border-gray-100 rounded-xl text-[9px] font-black uppercase outline-none">
+                  {['New','Screening','For Interview','Hired','Rejected','On Hold'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="flex-1 p-3">
+                <p className="text-[7px] font-black text-gray-400 uppercase mb-1">Interview</p>
+                <select value={selectedHiringApplicant.interview_response || 'Pending'}
+                  onChange={e => updateHiringStatus(selectedHiringApplicant.id, 'interview_response', e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-50 border border-gray-100 rounded-xl text-[9px] font-black uppercase outline-none">
+                  {['Pending','Confirmed','No Response','Declined','Rescheduled'].map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Follow-up date */}
+            <div className="px-5 py-3 border-b shrink-0 flex items-center gap-3">
+              <SafeIcon icon={FiCalendar} className="text-purple-500 shrink-0" />
+              <div className="flex-1">
+                <p className="text-[7px] font-black text-gray-400 uppercase mb-1">Follow-Up Date</p>
+                <input type="date" key={selectedHiringApplicant.id}
+                  defaultValue={selectedHiringApplicant.follow_up_date || ''}
+                  onBlur={async e => { await updateHiringStatus(selectedHiringApplicant.id, 'follow_up_date', e.target.value); }}
+                  className="w-full text-[11px] font-bold outline-none bg-transparent" />
+              </div>
+            </div>
+
+            {/* Staff selector */}
+            <div className="px-5 py-3 border-b shrink-0">
+              <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
+                className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}>
+                <option value="">— Select Staff —</option>
+                {['RHEA','MEL','PRINCESS','ARSLAN'].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+
+            {/* Add note */}
+            <div className="px-5 py-3 border-b shrink-0 space-y-2">
+              <textarea value={hiringNote} onChange={e => setHiringNote(e.target.value)}
+                placeholder="Add follow-up note..."
+                rows={2}
+                className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-bold uppercase outline-none resize-none" />
+              <div className="flex gap-2">
+                {['Called','Messaged','Interviewed','On Hold','Note'].map(action => (
+                  <button key={action} onClick={() => handleHiringNote(action)}
+                    disabled={!hiringNote.trim() || !selectedStaff || isSavingHiringNote}
+                    className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-[8px] font-black uppercase disabled:opacity-40 hover:bg-purple-700 transition-all">
+                    {action}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* History */}
+            <div className="overflow-y-auto p-4 no-scrollbar space-y-2 bg-gray-50/30">
+              <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-2">Activity History</p>
+              {(selectedHiringApplicant.history || []).length === 0 ? (
+                <p className="text-center text-gray-300 text-[9px] font-black uppercase py-6">No activity yet</p>
+              ) : (selectedHiringApplicant.history || []).map((log, i) => (
+                <div key={i} className="bg-white rounded-[16px] border border-gray-100 p-3">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="flex gap-1.5 flex-wrap">
+                      <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 uppercase">{log.action || 'Note'}</span>
+                      <span className="text-[7px] font-black text-purple-500 uppercase">{log.staff}</span>
+                    </div>
+                    <span className="text-[7px] text-gray-400 font-bold shrink-0 ml-2">{log.date}</span>
+                  </div>
+                  <p className="text-[9px] font-bold text-gray-700 uppercase">{log.comment}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : selectedSoldUnit ? (
+          <div className="bg-white rounded-[32px] xl:rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden flex flex-col animate-in slide-in-from-right-8 duration-300 max-h-[90vh] xl:max-h-[calc(100vh-120px)] sticky top-4">
             {/* Header */}
             <div className="bg-gray-900 px-8 py-8 text-white shrink-0">
               <div className="flex justify-between items-start mb-3">
@@ -442,7 +795,7 @@ const FollowUpModule = () => {
                 color="text-green-500" />
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 no-scrollbar bg-gray-50/30 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 no-scrollbar bg-gray-50/30 space-y-4 max-h-[calc(100vh-280px)]">
               {/* Unit info */}
               <div className="bg-white rounded-[20px] border border-gray-100 p-4">
                 <p className="text-[7px] font-black text-gray-400 uppercase tracking-widest mb-3">Unit Details</p>
@@ -508,7 +861,7 @@ const FollowUpModule = () => {
             </div>
           </div>
         ) : selectedItem ? (
-          <div className="bg-white h-full rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden flex flex-col animate-in slide-in-from-right-8 duration-300">
+          <div className="bg-white rounded-[32px] xl:rounded-[40px] shadow-2xl border border-gray-100 overflow-hidden flex flex-col animate-in slide-in-from-right-8 duration-300 max-h-[90vh] xl:max-h-[calc(100vh-120px)] sticky top-4">
             <div className={`px-8 py-10 text-white shrink-0 relative ${selectedItem.status === 'Closed' ? 'bg-gray-700' : 'bg-gray-900'}`}>
               <div className="absolute top-8 right-8 flex gap-2">
                 <button onClick={() => setSelectedItem(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-all"><SafeIcon icon={FiX} /></button>
@@ -518,6 +871,22 @@ const FollowUpModule = () => {
                 <span className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase tracking-widest border border-white/20 ${selectedItem.status === 'Closed' ? 'bg-red-500' : 'bg-green-500'}`}>{selectedItem.status}</span>
               </div>
               <h3 className="text-2xl font-black uppercase tracking-tight leading-tight">{selectedItem.customer_name}</h3>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[7px] font-black text-white/40 uppercase tracking-widest shrink-0">Interested In:</span>
+                <input
+                  key={selectedItem.id}
+                  type="text"
+                  placeholder="Enter unit of interest..."
+                  defaultValue={selectedItem.unit_interest || ''}
+                  onBlur={async e => {
+                    const val = e.target.value.toUpperCase();
+                    await supabase.from('follow_ups_2024').update({ unit_interest: val }).eq('id', selectedItem.id);
+                    fetchFollowUps();
+                    setSelectedItem(prev => ({ ...prev, unit_interest: val }));
+                  }}
+                  className="flex-1 bg-white/10 text-white placeholder:text-white/30 text-[10px] font-bold px-3 py-1.5 rounded-xl outline-none focus:bg-white/20 uppercase border border-white/10 focus:border-white/30 transition-all"
+                />
+              </div>
               <div className="flex items-center gap-4 mt-3">
                 <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/50 uppercase"><SafeIcon icon={FiPhone} /> {selectedItem.phone_number}</div>
               </div>
@@ -539,7 +908,7 @@ const FollowUpModule = () => {
               />
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 no-scrollbar bg-gray-50/30">
+            <div className="overflow-y-auto p-6 no-scrollbar bg-gray-50/30 max-h-[60vh] xl:max-h-[calc(100vh-320px)]">
               {/* Staff Selector — always visible, required before any activity */}
               <div className={`p-4 rounded-[24px] border shadow-sm mb-4 ${!selectedStaff ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-white'}`}>
                 <p className={`text-[8px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
