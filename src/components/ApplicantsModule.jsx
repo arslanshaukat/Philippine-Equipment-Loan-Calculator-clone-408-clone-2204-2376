@@ -117,9 +117,30 @@ export default function ApplicantsModule() {
     setIsSaving(true);
     try {
       const fd = new FormData();
-      const fields = { ...formData, full_name: (formData.full_name||'').toUpperCase(), job_role: (formData.job_role||'').toUpperCase(), city: (formData.city||'').toUpperCase(), handled_by: selectedStaff, asking_salary: parseFloat(formData.asking_salary)||0, offered_salary: parseFloat(formData.offered_salary)||0 };
+      const allowedFields = ['full_name','phone','messenger_link','job_role','city','date_applied','available_date','asking_salary','offered_salary','interview_response','status','notes','handled_by','follow_up_date'];
+      const fields = {
+        full_name: (formData.full_name||'').toUpperCase(),
+        phone: formData.phone||'',
+        messenger_link: formData.messenger_link||'',
+        job_role: (formData.job_role||'').toUpperCase(),
+        city: (formData.city||'').toUpperCase(),
+        date_applied: formData.date_applied||'',
+        available_date: formData.available_date||'',
+        asking_salary: parseFloat(formData.asking_salary)||0,
+        offered_salary: parseFloat(formData.offered_salary)||0,
+        interview_response: formData.interview_response||'Pending',
+        status: formData.status||'New',
+        notes: formData.notes||'',
+        handled_by: selectedStaff,
+        follow_up_date: formData.follow_up_date||'',
+      };
+      const numberFields = ['asking_salary', 'offered_salary'];
       for (const [k,v] of Object.entries(fields)) {
-        if (v !== null && v !== undefined && v !== '') fd.append(k, String(v));
+        if (numberFields.includes(k)) {
+          if (v > 0) fd.append(k, String(v));
+        } else if (v !== null && v !== undefined && v !== '') {
+          fd.append(k, String(v));
+        }
       }
       if (resumeFile) fd.append('resume', resumeFile);
 
@@ -130,7 +151,11 @@ export default function ApplicantsModule() {
         const res = await fetch(`/api/collections/applicants/records/${editingId}`, {
           method: 'PATCH', headers, body: fd
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error('PATCH error:', errText);
+          throw new Error(errText);
+        }
         await logActivity('Updated Applicant', { name: fields.full_name, job_role: fields.job_role, status: fields.status }, editingId);
       } else {
         const res = await fetch('/api/collections/applicants/records', {

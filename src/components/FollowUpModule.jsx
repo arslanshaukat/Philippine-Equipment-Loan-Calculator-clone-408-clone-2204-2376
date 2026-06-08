@@ -113,9 +113,10 @@ const FollowUpModule = () => {
 
   const fetchApplicants = async () => {
     try {
-      const { data } = await supabase.from('applicants').select('*');
-      // Only show applicants with future available_date or interview scheduled
-      setApplicants(data || []);
+      const res = await fetch('/api/collections/applicants/records?perPage=500');
+      const d = await res.json();
+      console.log('[App] items:', d.items?.length, 'today:', new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Manila'}), 'sample:', d.items?.filter(a=>a.follow_up_date).map(a=>a.full_name+':'+a.follow_up_date));
+      setApplicants(d.items || []);
     } catch(e) { console.error(e); }
   };
 
@@ -149,7 +150,7 @@ const FollowUpModule = () => {
     fetchApplicants();
   }, []);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
   const filteredData = useMemo(() => {
     return followUps.filter(item => {
@@ -211,6 +212,7 @@ const FollowUpModule = () => {
     const s = searchTerm.toLowerCase();
     if (activeTab === 'Hiring') {
       return applicants.filter(a => {
+        if (!a.follow_up_date) return false;
         if (a.status === 'Hired' || a.status === 'Rejected') return false;
         return !s || a.full_name?.toLowerCase().includes(s) || a.phone?.includes(s) || a.job_role?.toLowerCase().includes(s);
       });
@@ -223,7 +225,8 @@ const FollowUpModule = () => {
       if (!matchSearch) return false;
       if (activeTab === 'Due') return a.follow_up_date <= today;
       if (activeTab === 'Upcoming') return a.follow_up_date > today;
-      return true;
+      if (activeTab === 'All') return true;
+      return false;
     });
   }, [applicants, searchTerm, activeTab, today]);
 
@@ -661,6 +664,40 @@ const FollowUpModule = () => {
                   <div className="flex justify-between items-center">
                     <p className="text-[8px] font-bold text-gray-400">{unit.phone}</p>
                     <p className="text-[8px] font-black text-green-600">Sold: {unit.sale_date || '—'}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Hiring Follow-Up Section */}
+          {filteredApplicants.length > 0 && activeTab !== 'Hiring' && activeTab !== 'Activity' && (
+            <div className="mt-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="h-px flex-1 bg-purple-100" />
+                <span className="text-[8px] font-black text-purple-600 uppercase tracking-widest bg-purple-50 px-3 py-1 rounded-full border border-purple-100">
+                  Hiring Follow-Up — {filteredApplicants.length}
+                </span>
+                <div className="h-px flex-1 bg-purple-100" />
+              </div>
+              {filteredApplicants.map((a, i) => (
+                <div key={i} onClick={() => { setSelectedHiringApplicant(a); setSelectedItem(null); setSelectedSoldUnit(null); }}
+                  className={`p-4 mb-3 bg-white rounded-[24px] border cursor-pointer transition-all hover:border-purple-300 hover:shadow-md ${selectedHiringApplicant?.id === a.id ? 'border-purple-500 bg-purple-50/30' : 'border-purple-100'}`}>
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h4 className="font-black text-gray-900 uppercase text-[11px]">{a.full_name}</h4>
+                      <p className="text-[8px] font-bold text-purple-600 uppercase">{a.job_role || '—'}</p>
+                    </div>
+                    <span className={`text-[7px] font-black px-2 py-0.5 rounded-full uppercase ${a.follow_up_date <= today ? 'bg-red-50 text-red-600 animate-pulse' : 'bg-purple-50 text-purple-600'}`}>
+                      {a.follow_up_date <= today ? '⚠ DUE' : a.follow_up_date}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {a.city && <span className="text-[7px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-lg uppercase font-bold">{a.city}</span>}
+                    {a.phone && <span className="text-[7px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-lg font-bold">{a.phone}</span>}
+                    <span className={`text-[7px] font-black px-2 py-0.5 rounded-lg uppercase ${a.interview_response === 'Confirmed' ? 'bg-green-50 text-green-600' : a.interview_response === 'No Response' ? 'bg-red-50 text-red-600' : 'bg-yellow-50 text-yellow-600'}`}>
+                      {a.interview_response || 'Pending'}
+                    </span>
                   </div>
                 </div>
               ))}
