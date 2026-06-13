@@ -14,6 +14,9 @@ const FollowUpModule = () => {
   const [applicants, setApplicants] = useState([]);
   const [selectedSoldUnit, setSelectedSoldUnit] = useState(null);
   const [selectedHiringApplicant, setSelectedHiringApplicant] = useState(null);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [convertForm, setConvertForm] = useState({ chassis_no: '', engine_no: '', make: '', model: '', year: '', color: '', sale_price: '', payment_type: 'Cash', sale_date: new Date().toISOString().split('T')[0] });
+  const [isConverting, setIsConverting] = useState(false);
   const [hiringNote, setHiringNote] = useState('');
   const [isSavingHiringNote, setIsSavingHiringNote] = useState(false);
   const [soldNote, setSoldNote] = useState('');
@@ -57,6 +60,48 @@ const FollowUpModule = () => {
       setSoldNote('');
     } catch(e) { alert(e.message); }
     finally { setIsSavingSoldNote(false); }
+  };
+
+  const handleConvertToSold = async () => {
+    if (!selectedItem) { alert('No lead selected'); return; }
+    setIsConverting(true);
+    try {
+      const staff = selectedStaff || 'STAFF';
+      const soldRecord = {
+        buyer_name: selectedItem.customer_name,
+        phone: selectedItem.phone_number,
+        make: (convertForm.make || selectedItem.unit_interest || '').toUpperCase(),
+        model: (convertForm.model || '').toUpperCase(),
+        year: convertForm.year || '',
+        chassis_no: (convertForm.chassis_no || '').toUpperCase(),
+        engine_no: (convertForm.engine_no || '').toUpperCase(),
+        color: (convertForm.color || '').toUpperCase(),
+        sale_price: parseFloat(convertForm.sale_price) || 0,
+        payment_type: convertForm.payment_type || 'Cash',
+        sale_date: convertForm.sale_date || new Date().toISOString().split('T')[0],
+        handled_by: staff,
+        notes: 'Converted from Follow-Up by ' + staff,
+        next_follow_up: '',
+        follow_up_notes: '',
+      };
+      // Use PocketBase directly
+      const res = await fetch('/api/collections/sold_units/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(soldRecord)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      // Close the lead
+      await supabase.from('follow_ups_2024').update({ status: 'Closed' }).eq('id', selectedItem.id);
+      const entry = { date: new Date().toLocaleString(), comment: 'CONVERTED TO SOLD — ' + soldRecord.make + ' ' + soldRecord.model, staff, action: 'Converted to Sold' };
+      const updatedHistory = [entry, ...(selectedItem.history || [])];
+      await supabase.from('follow_ups_2024').update({ history: updatedHistory }).eq('id', selectedItem.id);
+      setShowConvertModal(false);
+      setSelectedItem(null);
+      fetchFollowUps();
+      alert('✅ Lead converted to Sold Unit successfully!');
+    } catch(e) { alert('Error: ' + e.message); }
+    finally { setIsConverting(false); }
   };
 
   const handleManagerNote = async (itemId, note) => {
@@ -532,7 +577,8 @@ const FollowUpModule = () => {
                           <div className="flex justify-between items-start">
                             <div className="flex gap-1.5 flex-wrap items-center">
                               {log.staff === 'ARSLAN' && <span className="text-[7px] font-black px-1.5 py-0.5 rounded-full bg-amber-500 text-white uppercase">👑 MGR</span>}
-                              <span className={`text-[7px] font-black px-1.5 py-0.5 rounded uppercase ${log.action === 'Manager Note' ? 'bg-amber-100 text-amber-700' : log.action === 'Closed' ? 'bg-red-50 text-red-600' : log.action === 'Hot Prospect' ? 'bg-orange-50 text-orange-600' : log.action === 'Call' ? 'bg-blue-50 text-blue-600' : 'bg-indigo-50 text-indigo-600'}`}>{log.action || 'Note'}</span>
+                              {log.module && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 uppercase">{log.module}</span>}
+                              <span className={`text-[7px] font-black px-1.5 py-0.5 rounded uppercase ${log.action === 'Manager Note' ? 'bg-amber-100 text-amber-700' : log.action === 'Closed' ? 'bg-red-50 text-red-600' : log.action === 'Hot Prospect' ? 'bg-orange-50 text-orange-600' : log.action === 'Call Logged' || log.action === 'Call' ? 'bg-blue-50 text-blue-600' : log.action === 'Promoted to Follow-Up' ? 'bg-green-50 text-green-600' : 'bg-indigo-50 text-indigo-600'}`}>{log.action || 'Note'}</span>
                               {log.attempts && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700">{log.attempts}x</span>}
                               <span className={`text-[7px] font-black uppercase ${log.staff === 'ARSLAN' ? 'text-amber-600' : 'text-indigo-500'}`}>{log.staff}</span>
                             </div>
@@ -943,6 +989,12 @@ const FollowUpModule = () => {
                 active={selectedItem.temperature === 'Hot'}
                 color="text-orange-500"
               />
+              <button
+                onClick={() => { setConvertForm({ chassis_no: '', engine_no: '', make: selectedItem?.unit_interest || '', model: '', year: '', color: '', sale_price: '', payment_type: 'Cash', sale_date: new Date().toISOString().split('T')[0] }); setShowConvertModal(true); }}
+                className="flex-1 py-5 flex flex-col items-center gap-2 transition-all hover:bg-green-50 bg-green-50/30">
+                <SafeIcon icon={FiCheckCircle} className="text-xl text-green-600" />
+                <span className="text-[7px] font-black uppercase tracking-widest text-green-600">SOLD</span>
+              </button>
             </div>
 
             <div className="overflow-y-auto p-6 no-scrollbar bg-gray-50/30 max-h-[60vh] xl:max-h-[calc(100vh-320px)]">
@@ -1097,7 +1149,68 @@ const FollowUpModule = () => {
           </div>
         )}
       </div>
+      {showConvertModal && selectedItem && (
+        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShowConvertModal(false)}>
+          <div className="bg-white w-full max-w-lg rounded-t-[28px] sm:rounded-[28px] shadow-2xl overflow-hidden flex flex-col max-h-[92vh]" onClick={e => e.stopPropagation()}>
+            <div className="bg-green-600 px-6 py-5 text-white flex justify-between items-center shrink-0">
+              <div>
+                <h3 className="font-black text-base uppercase">Convert to Sold</h3>
+                <p className="text-green-200 text-[9px] uppercase mt-0.5">{selectedItem.customer_name}</p>
+              </div>
+              <button onClick={() => setShowConvertModal(false)} className="p-2 bg-white/10 rounded-full"><SafeIcon icon={FiX} /></button>
+            </div>
+            <div className="p-5 overflow-y-auto no-scrollbar space-y-3 flex-1">
+              {/* Staff selector */}
+              <div className={`p-3 rounded-2xl border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
+                <p className={`text-[7px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
+                  {!selectedStaff ? '⚠ Select Staff Before Confirming' : '✅ Handled By: ' + selectedStaff}
+                </p>
+                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
+                  className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
+                  <option value="">— Select Staff —</option>
+                  {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {[['Make / Brand','make','ISUZU'],['Model','model','6WF1'],['Year','year','2020'],['Color','color','WHITE'],['Chassis No','chassis_no',''],['Engine No','engine_no','']].map(([label,key,ph]) => (
+                  <div key={key}>
+                    <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">{label}</label>
+                    <input type="text" value={convertForm[key]} onChange={e => setConvertForm({...convertForm, [key]: e.target.value.toUpperCase()})} placeholder={ph}
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none focus:ring-2 focus:ring-green-100" />
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Sale Price (₱)</label>
+                  <input type="number" value={convertForm.sale_price} onChange={e => setConvertForm({...convertForm, sale_price: e.target.value})}
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none focus:ring-2 focus:ring-green-100" />
+                </div>
+                <div>
+                  <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Payment Type</label>
+                  <select value={convertForm.payment_type} onChange={e => setConvertForm({...convertForm, payment_type: e.target.value})}
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none">
+                    {['Cash','Financing','Installment'].map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Sale Date</label>
+                <input type="date" value={convertForm.sale_date} onChange={e => setConvertForm({...convertForm, sale_date: e.target.value})}
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none focus:ring-2 focus:ring-green-100" />
+              </div>
+              <button onClick={handleConvertToSold} disabled={isConverting || !selectedStaff}
+                className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                <SafeIcon icon={FiCheckCircle} /> {isConverting ? 'Converting...' : 'Confirm Sale & Close Lead'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
+
+
   );
 };
 
@@ -1122,6 +1235,7 @@ const SectionLabel = ({ icon, text }) => (
   <div className="flex items-center gap-2 mb-4">
     <SafeIcon icon={icon} className="text-indigo-600 text-sm" />
     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">{text}</span>
+
   </div>
 );
 

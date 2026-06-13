@@ -85,6 +85,7 @@ const CallLogModule = () => {
       } else {
         await supabase.from('daily_call_logs_2024').insert([payload]);
       }
+      await logActivity('Call Logged', { name: payload.customer_name, phone: payload.phone_number, status: payload.status, comment: payload.comment }, payload.staff_name);
       resetForm();
       fetchLogs();
     } catch (err) {
@@ -92,6 +93,18 @@ const CallLogModule = () => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const logActivity = async (action, details, staff) => {
+    try {
+      await supabase.from('activity_log').insert([{
+        staff: staff || 'SYSTEM',
+        action,
+        module: 'Calls',
+        details,
+        timestamp: new Date().toISOString(),
+      }]);
+    } catch(e) { console.error('Activity log failed:', e); }
   };
 
   const handleQueueToCall = (log) => {
@@ -132,6 +145,7 @@ const CallLogModule = () => {
       // Delete from call logs after successful promotion
       await supabase.from('daily_call_logs_2024').delete().eq('id', log.id);
       
+      await logActivity('Promoted to Follow-Up', { name: log.customer_name, phone: log.phone_number, temperature: updates.temperature || 'Warm' }, log.staff_name);
       alert(`✅ ${log.customer_name} moved to Follow-Ups Registry`);
       fetchLogs();
       setShowDatePicker(null);
