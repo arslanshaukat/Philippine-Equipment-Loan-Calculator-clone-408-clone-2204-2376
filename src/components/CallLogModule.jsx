@@ -210,12 +210,10 @@ const CallLogModule = () => {
     const history = {};
 
     filtered.forEach(log => {
-      if (log.status === 'To Call') {
-        if (log.resolved_at) {
-          resolvedQueue.push(log);
-        } else {
-          queue.push(log);
-        }
+      if (log.resolved_at) {
+        resolvedQueue.push(log);
+      } else if (log.status === 'To Call') {
+        queue.push(log);
       } else {
         const displayDate = log.updated_at || log.created_at;
         const date = new Date(displayDate).toLocaleDateString('en-US', {
