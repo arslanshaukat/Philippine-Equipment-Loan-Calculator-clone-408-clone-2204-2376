@@ -5,12 +5,16 @@ import {
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
+import UnitDetailModal from './UnitDetailModal';
+import pb from '../supabase/supabase';
 
-const PriceListModule = () => {
+const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [selectedUnit, setSelectedUnit] = useState(null);
+  const [jobOrderUnits, setJobOrderUnits] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState('');
@@ -51,7 +55,21 @@ const PriceListModule = () => {
 
   useEffect(() => {
     fetchPriceList();
+    fetchJobOrderUnits();
   }, []);
+
+  const fetchJobOrderUnits = async () => {
+    try {
+      const jobOrderJobs = await pb.collection('jobs').getFullList({
+        filter: 'is_job_order=true && status!="Completed"',
+      });
+      const map = {};
+      jobOrderJobs.forEach(j => { map[j.unit] = j; });
+      setJobOrderUnits(map);
+    } catch (err) {
+      console.error('Failed to fetch job order units:', err);
+    }
+  };
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -170,7 +188,7 @@ const PriceListModule = () => {
       {/* Mobile card view */}
       <div className="sm:hidden space-y-2">
         {filteredItems.map((item) => (
-          <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm">
+          <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm cursor-pointer" onClick={() => setSelectedUnit(item)}>
             <div className="flex justify-between items-start mb-2">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg">{item.key_no}</span>
@@ -178,8 +196,11 @@ const PriceListModule = () => {
                   <div className="text-[11px] font-black text-gray-900 uppercase">{item.make}</div>
                   <div className="text-[8px] font-bold text-orange-500 uppercase">{item.type}</div>
                 </div>
+                {jobOrderUnits[item.id] && (
+                  <span className="text-[7px] px-1.5 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase">DP Paid</span>
+                )}
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => handleEdit(item)} className="p-2 bg-gray-50 text-gray-400 rounded-xl"><SafeIcon icon={FiEdit} /></button>
                 <button onClick={() => handleDelete(item.id)} className="p-2 bg-gray-50 text-red-300 rounded-xl"><SafeIcon icon={FiTrash2} /></button>
               </div>
@@ -224,8 +245,13 @@ const PriceListModule = () => {
           </thead>
           <tbody className="divide-y divide-gray-50 print:divide-black/10">
             {filteredItems.map((item) => (
-              <tr key={item.id} className="hover:bg-orange-50/30 transition-all group print:break-inside-avoid">
-                <td className="px-2 py-3 print:px-2 print:py-1 font-black text-[10px] text-gray-900 text-center">{item.key_no}</td>
+              <tr key={item.id} className="hover:bg-orange-50/30 transition-all group print:break-inside-avoid cursor-pointer" onClick={() => setSelectedUnit(item)}>
+                <td className="px-2 py-3 print:px-2 print:py-1 font-black text-[10px] text-gray-900 text-center">
+                  {item.key_no}
+                  {jobOrderUnits[item.id] && (
+                    <div className="mt-1 text-[6px] px-1 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase print:hidden">DP</div>
+                  )}
+                </td>
                 <td className="px-4 py-3 print:px-2 print:py-1">
                   <div className="text-[10px] font-black text-gray-900 uppercase">{item.make}</div>
                   <div className="text-[8px] font-bold text-orange-600 uppercase print:text-black mt-0.5">{item.type}</div>
@@ -243,7 +269,7 @@ const PriceListModule = () => {
                 <td className="px-4 py-3 print:px-2 print:py-1 text-[8px] font-medium text-gray-500 print:text-black leading-tight max-w-[140px]">
                   {item.remarks || '--'}
                 </td>
-                <td className="px-4 py-3 text-right print:hidden">
+                <td className="px-4 py-3 text-right print:hidden" onClick={(e) => e.stopPropagation()}>
                   <div className="flex justify-end gap-1">
                     <button onClick={() => handleEdit(item)} className="p-2 text-gray-400 hover:text-orange-600"><SafeIcon icon={FiEdit} /></button>
                     <button onClick={() => handleDelete(item.id)} className="p-2 text-gray-300 hover:text-red-600"><SafeIcon icon={FiTrash2} /></button>
@@ -298,6 +324,15 @@ const PriceListModule = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {selectedUnit && (
+        <UnitDetailModal
+          unit={selectedUnit}
+          onClose={() => setSelectedUnit(null)}
+          onOpenJob={(jobId) => { setSelectedUnit(null); if (onNavigateToJob) onNavigateToJob(jobId); }}
+          onCreateJob={(unit) => { setSelectedUnit(null); if (onNavigateToNewJobForUnit) onNavigateToNewJobForUnit(unit.id); }}
+        />
       )}
 
       <style>{`
