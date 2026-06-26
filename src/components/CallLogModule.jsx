@@ -16,6 +16,7 @@ const CallLogModule = () => {
   const [lookingUp, setLookingUp] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [queueView, setQueueView] = useState('pending');
   
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [futureDate, setFutureDate] = useState('');
@@ -141,11 +142,16 @@ const CallLogModule = () => {
         }]);
 
       if (insertError) throw insertError;
-      
-      // Delete from call logs after successful promotion
-      await supabase.from('daily_call_logs_2024').delete().eq('id', log.id);
-      
-      await logActivity('Promoted to Follow-Up', { name: log.customer_name, phone: log.phone_number, temperature: updates.temperature || 'Warm' }, log.staff_name);
+
+      // Soft-close: keep the record, mark it resolved instead of deleting
+      const resolvedAt = new Date().toISOString();
+      const queuedDurationMin = Math.round((new Date(resolvedAt) - new Date(log.created_at)) / 60000);
+      await supabase.from('daily_call_logs_2024').update({
+        resolved_at: resolvedAt,
+        resolution: updates.temperature === 'Hot' ? 'Promoted (Hot)' : 'Promoted'
+      }).eq('id', log.id);
+
+      await logActivity('Promoted to Follow-Up', { name: log.customer_name, phone: log.phone_number, temperature: updates.temperature || 'Warm', waited_minutes: queuedDurationMin }, log.staff_name);
       alert(`✅ ${log.customer_name} moved to Follow-Ups Registry`);
       fetchLogs();
       setShowDatePicker(null);
@@ -172,7 +178,14 @@ const CallLogModule = () => {
         history: [historyEntry]
       }]);
 
-      await supabase.from('daily_call_logs_2024').delete().eq('id', log.id);
+      const resolvedAt = new Date().toISOString();
+      const queuedDurationMin = Math.round((new Date(resolvedAt) - new Date(log.created_at)) / 60000);
+      await supabase.from('daily_call_logs_2024').update({
+        resolved_at: resolvedAt,
+        resolution: 'Closed'
+      }).eq('id', log.id);
+
+      await logActivity('Closed Lead', { name: log.customer_name, phone: log.phone_number, waited_minutes: queuedDurationMin }, log.staff_name);
       fetchLogs();
     } catch (err) {
       alert("Error: " + err.message);
@@ -184,7 +197,7 @@ const CallLogModule = () => {
     setFormData({ staff_name: formData.staff_name, customer_name: '', phone_number: '', reason: '', status: 'Answered', comment: '' });
   };
 
-  const { queueItems, historyGroups } = useMemo(() => {
+  const { queueItems, historyGroups, resolvedQueueItems } = useMemo(() => {
     const search = searchTerm.toLowerCase();
     const filtered = logs.filter(log => 
       (log.customer_name || '').toLowerCase().includes(search) ||
@@ -193,11 +206,16 @@ const CallLogModule = () => {
     );
 
     const queue = [];
+    const resolvedQueue = [];
     const history = {};
 
     filtered.forEach(log => {
       if (log.status === 'To Call') {
-        queue.push(log);
+        if (log.resolved_at) {
+          resolvedQueue.push(log);
+        } else {
+          queue.push(log);
+        }
       } else {
         const displayDate = log.updated_at || log.created_at;
         const date = new Date(displayDate).toLocaleDateString('en-US', {
@@ -208,8 +226,16 @@ const CallLogModule = () => {
       }
     });
 
-    return { queueItems: queue, historyGroups: history };
+    queue.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    resolvedQueue.sort((a, b) => new Date(b.resolved_at) - new Date(a.resolved_at));
+
+    return { queueItems: queue, historyGroups: history, resolvedQueueItems: resolvedQueue };
   }, [logs, searchTerm]);
+
+  const oldestWaitMinutes = queueItems.length
+    ? Math.round((Date.now() - new Date(queueItems[0].created_at)) / 60000)
+    : 0;
+  const formatWait = (mins) => mins < 60 ? `${mins}m` : `${Math.floor(mins/60)}h ${mins%60}m`;
 
   return (
     <div className="flex flex-col xl:flex-row gap-3">
@@ -368,37 +394,106 @@ const CallLogModule = () => {
             <h3 className="text-[10px] font-black text-indigo-700 uppercase tracking-[0.2em] flex items-center gap-2">
               <SafeIcon icon={FiPhoneForwarded} /> Priority: To Call List
             </h3>
-            <span className="text-[9px] font-black bg-indigo-600 text-white px-3 py-1 rounded-full">{queueItems.length} PENDING</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-white rounded-full border border-indigo-100 p-0.5">
+                <button
+                  onClick={() => setQueueView('pending')}
+                  className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest transition-all ${queueView === 'pending' ? 'bg-indigo-600 text-white' : 'text-indigo-400'}`}
+                >
+                  Pending
+                </button>
+                <button
+                  onClick={() => setQueueView('history')}
+                  className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest transition-all ${queueView === 'history' ? 'bg-indigo-600 text-white' : 'text-indigo-400'}`}
+                >
+                  History
+                </button>
+              </div>
+              <span className="text-[9px] font-black bg-indigo-600 text-white px-3 py-1 rounded-full">
+                {queueView === 'pending' ? queueItems.length + ' PENDING' : resolvedQueueItems.length + ' RESOLVED'}
+              </span>
+            </div>
           </div>
+
+          {queueView === 'pending' && queueItems.length > 0 && (
+            <div className="px-6 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+              <SafeIcon icon={FiClock} className="text-amber-500 text-xs" />
+              <span className="text-[9px] font-black text-amber-700 uppercase tracking-widest">
+                {queueItems.length} waiting &middot; oldest {formatWait(oldestWaitMinutes)}
+              </span>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar bg-gray-50/20">
             {loading ? (
               <div className="py-20 text-center"><FiRefreshCw className="animate-spin text-indigo-200 text-3xl mx-auto" /></div>
-            ) : queueItems.length > 0 ? (
-              queueItems.map(item => (
-                <div key={item.id} className="p-5 bg-white border border-indigo-100 rounded-[24px] group shadow-sm hover:shadow-md transition-all">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="text-[12px] font-black text-gray-900 uppercase tracking-tight">{item.customer_name || 'UNNAMED LEAD'}</h4>
-                      <p className="text-[10px] font-bold text-indigo-600">{item.phone_number}</p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span className="text-[8px] font-black text-gray-400 uppercase">By {item.staff_name}</span>
-                        <span className="text-[8px] font-black text-indigo-400 uppercase">{item.reason}</span>
+
+            ) : queueView === 'pending' ? (
+              queueItems.length > 0 ? (
+                queueItems.map(item => {
+                  const waitedMin = Math.round((Date.now() - new Date(item.created_at)) / 60000);
+                  return (
+                    <div key={item.id} className="p-5 bg-white border border-indigo-100 rounded-[24px] group shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="text-[12px] font-black text-gray-900 uppercase tracking-tight">{item.customer_name || 'UNNAMED LEAD'}</h4>
+                          <p className="text-[10px] font-bold text-indigo-600">{item.phone_number}</p>
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            <span className="text-[8px] font-black text-gray-400 uppercase">By {item.staff_name}</span>
+                            <span className="text-[8px] font-black text-indigo-400 uppercase">{item.reason}</span>
+                            <span className="text-[8px] font-black text-amber-500 uppercase">Queued {formatWait(waitedMin)} ago</span>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => handleQueueToCall(item)}
+                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-all"
+                        >
+                          Process <SafeIcon icon={FiArrowRight} />
+                        </button>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => handleQueueToCall(item)}
-                      className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-all"
-                    >
-                      Process <SafeIcon icon={FiArrowRight} />
-                    </button>
-                  </div>
+                  );
+                })
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
+                  <SafeIcon icon={FiCheckCircle} className="text-4xl mb-3 opacity-20" />
+                  <p className="text-[9px] font-black uppercase tracking-widest">No Priority Calls</p>
                 </div>
-              ))
+              )
+
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
-                <SafeIcon icon={FiCheckCircle} className="text-4xl mb-3 opacity-20" />
-                <p className="text-[9px] font-black uppercase tracking-widest">No Priority Calls</p>
-              </div>
+              resolvedQueueItems.length > 0 ? (
+                resolvedQueueItems.map(item => {
+                  const waitedMin = item.resolved_at
+                    ? Math.round((new Date(item.resolved_at) - new Date(item.created_at)) / 60000)
+                    : 0;
+                  return (
+                    <div key={item.id} className="p-5 bg-white border border-gray-100 rounded-[24px] shadow-sm">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="text-[12px] font-black text-gray-700 uppercase tracking-tight">{item.customer_name || 'UNNAMED LEAD'}</h4>
+                          <p className="text-[10px] font-bold text-gray-400">{item.phone_number}</p>
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            <span className="text-[8px] font-black text-gray-400 uppercase">By {item.staff_name}</span>
+                            <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${item.resolution && item.resolution.indexOf('Promoted') === 0 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                              {item.resolution || 'Resolved'}
+                            </span>
+                            <span className="text-[8px] font-black text-gray-400 uppercase">Waited {formatWait(waitedMin)}</span>
+                          </div>
+                        </div>
+                        <span className="text-[8px] font-bold text-gray-300 uppercase whitespace-nowrap">
+                          {item.resolved_at ? new Date(item.resolved_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
+                  <SafeIcon icon={FiList} className="text-4xl mb-3 opacity-20" />
+                  <p className="text-[9px] font-black uppercase tracking-widest">No Resolved Calls Yet</p>
+                </div>
+              )
             )}
           </div>
         </div>
