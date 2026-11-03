@@ -9,7 +9,6 @@ import { supabase } from '../supabase/supabase';
 import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 
-const STAFF = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
 const STATUSES = ['New', 'Screening', 'For Interview', 'Hired', 'Rejected', 'On Hold'];
 const INTERVIEW_RESPONSES = ['Pending', 'Confirmed', 'No Response', 'Declined', 'Rescheduled'];
 const CITIES = ['Subic', 'Olongapo', 'Zambales', 'Manila', 'Other'];
@@ -55,12 +54,12 @@ export default function ApplicantsModule() {
   const [selectedApplicant, setSelectedApplicant] = useState(null);
   const [formData, setFormData] = useState(emptyForm);
   const [resumeFile, setResumeFile] = useState(null);
-  const [selectedStaff, setSelectedStaff] = useState('');
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
 
   const logActivity = async (action, details, recordId = '') => {
     try {
       await supabase.from('activity_log').insert([{
-        staff: selectedStaff || 'SYSTEM',
+        staff: currentStaffName,
         action,
         module: 'Hiring',
         record_id: recordId,
@@ -113,7 +112,6 @@ export default function ApplicantsModule() {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!selectedStaff) { alert('⚠ Please select a staff member'); return; }
     setIsSaving(true);
     try {
       const fd = new FormData();
@@ -131,7 +129,7 @@ export default function ApplicantsModule() {
         interview_response: formData.interview_response||'Pending',
         status: formData.status||'New',
         notes: formData.notes||'',
-        handled_by: selectedStaff,
+        handled_by: currentStaffName,
         follow_up_date: formData.follow_up_date||'',
       };
       const numberFields = ['asking_salary', 'offered_salary'];
@@ -176,7 +174,6 @@ export default function ApplicantsModule() {
 
   const handleEdit = (a) => {
     setFormData({ ...emptyForm, ...a });
-    setSelectedStaff(a.handled_by || '');
     setEditingId(a.id);
     setShowForm(true);
     setSelectedApplicant(null);
@@ -221,7 +218,7 @@ export default function ApplicantsModule() {
               <button onClick={fetchApplicants} className="p-2.5 bg-gray-50 text-gray-400 rounded-xl border border-gray-100 hover:text-purple-600 transition-all">
                 <SafeIcon icon={FiRefreshCw} className={loading ? 'animate-spin' : ''} />
               </button>
-              <button onClick={() => { setFormData(emptyForm); setEditingId(null); setSelectedStaff(''); setResumeFile(null); setShowForm(true); }}
+              <button onClick={() => { setFormData(emptyForm); setEditingId(null); setResumeFile(null); setShowForm(true); }}
                 className="px-4 py-2.5 bg-purple-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-purple-700 transition-all flex items-center gap-2">
                 <SafeIcon icon={FiPlus} /> Add
               </button>
@@ -498,19 +495,15 @@ export default function ApplicantsModule() {
                 )}
               </Field>
 
-              {/* Staff selector */}
-              <div className={`p-3 rounded-2xl border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
-                <p className={`text-[7px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Saving' : 'Handled By'}
-                </p>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-3 py-2.5 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
-                  <option value="">— Select Staff —</option>
-                  {STAFF.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+              {/* Staff (auto) */}
+              <div className="p-3 rounded-2xl border bg-gray-50 border-gray-100">
+                <p className="text-[7px] font-black uppercase tracking-widest mb-2 text-gray-400">Handled By</p>
+                <div className="w-full px-3 py-2.5 border border-gray-200 bg-white rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+                  <SafeIcon icon={FiUsers} className="text-gray-400" /> {currentStaffName}
+                </div>
               </div>
 
-              <button type="submit" disabled={isSaving || !selectedStaff}
+              <button type="submit" disabled={isSaving}
                 className="w-full py-4 bg-purple-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg hover:bg-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                 <SafeIcon icon={FiSave} /> {isSaving ? 'Saving...' : editingId ? 'Update Applicant' : 'Save Applicant'}
               </button>

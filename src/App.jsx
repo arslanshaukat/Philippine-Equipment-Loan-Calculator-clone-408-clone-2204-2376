@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Suspense, useRef, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './supabase/supabase';
+import pb from './supabase/supabase';
 import './App.css';
 
 // Route-based code splitting for performance
@@ -35,6 +36,15 @@ function App() {
 
     const initAuth = async () => {
       try {
+        if (pb.authStore.isValid) {
+          try {
+            await pb.collection('users').authRefresh();
+          } catch (refreshErr) {
+            // token invalid, or account deactivated server-side — clear
+            // the stale session and force a fresh login
+            pb.authStore.clear();
+          }
+        }
         const { data: { session } } = await supabase.auth.getSession();
         if (mounted) {
           setUser(session?.user ?? null);

@@ -124,9 +124,15 @@ const ShipmentModule = () => {
           chassis_no: (u.chassis_no || '').toUpperCase(),
           description: (u.description || '').toUpperCase(),
           amount_php: parseFloat(u.amount_php) || 0,
-          duties_taxes: parseFloat(u.duties_taxes) || 0
+          duties_taxes: parseFloat(u.duties_taxes) || 0,
+          duties_paid: !!u.duties_paid,
+          duties_payment_date: u.duties_paid ? (u.duties_payment_date || '') : ''
         }));
         await supabase.from('shipment_units_20240218').insert(unitsPayload);
+
+        // Auto-update B/L amount_php to sum of UNPAID duties (outstanding balance)
+        const unpaidTotal = unitsPayload.reduce((sum, u) => sum + (!u.duties_paid ? (parseFloat(u.duties_taxes) || 0) : 0), 0);
+        await supabase.from('shipment_headers_20240218').update({ amount_php: unpaidTotal }).eq('id', shipmentId);
       }
 
       setShowModal(false);
@@ -167,7 +173,7 @@ const ShipmentModule = () => {
   const addUnitField = () => {
     setFormData({
       ...formData,
-      units: [...formData.units, { chassis_no: '', description: '', amount_php: '', duties_taxes: '' }]
+      units: [...formData.units, { chassis_no: '', description: '', amount_php: '', duties_taxes: '', duties_paid: false, duties_payment_date: '' }]
     });
   };
 
@@ -245,7 +251,13 @@ const ShipmentModule = () => {
                     <div className="text-[8px] text-gray-400 font-bold uppercase">{s.soa_date}</div>
                   </div>
                   <div className="text-right">
-                    <div className="font-black text-[13px] text-gray-900">₱{new Intl.NumberFormat().format(s.amount_php)}</div>
+                    <div className="font-black text-[13px] text-gray-900">
+                      ₱{new Intl.NumberFormat().format(s.amount_php)}
+                      <span className="text-[9px] font-black text-gray-400 ml-1">UNPAID</span>
+                    </div>
+                    <div className="text-[9px] font-bold text-gray-400">
+                      of ₱{new Intl.NumberFormat().format((s.units||[]).reduce((sum,u)=>sum+(parseFloat(u.duties_taxes)||0),0))} total
+                    </div>
                     <div className="text-[8px] text-gray-400 uppercase">{s.units?.length || 0} Chassis</div>
                   </div>
                 </div>
@@ -303,7 +315,10 @@ const ShipmentModule = () => {
                       <div className="text-[10px] font-black text-gray-600 uppercase mb-1">{s.units?.length || 0} Chassis</div>
                       <div className="text-[8px] font-bold text-gray-400 uppercase">{s.kgs?.toLocaleString() || 0} KG / {s.cbm?.toLocaleString() || 0} CBM</div>
                     </td>
-                    <td className="px-8 py-7 text-right font-black text-[15px] text-gray-900">₱{new Intl.NumberFormat().format(s.amount_php)}</td>
+                    <td className="px-8 py-7 text-right font-black text-[15px] text-gray-900">
+                      ₱{new Intl.NumberFormat().format(s.amount_php)}
+                      <div className="text-[9px] font-bold text-gray-400 mt-0.5">of ₱{new Intl.NumberFormat().format((s.units||[]).reduce((sum,u)=>sum+(parseFloat(u.duties_taxes)||0),0))} total</div>
+                    </td>
                   </tr>
                 )) : (
                   <tr><td colSpan="4" className="p-32 text-center">
@@ -360,6 +375,10 @@ const ShipmentModule = () => {
                   <div className="flex justify-between items-start mb-2">
                     <span className="text-[13px] font-black text-gray-900 uppercase tracking-tighter">{unit.chassis_no}</span>
                     <span className="text-[10px] font-black text-red-500 bg-red-50 px-2 py-0.5 rounded-lg">₱{new Intl.NumberFormat().format(unit.duties_taxes)}</span>
+                    {unit.duties_paid
+                      ? <span className="text-[8px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-lg border border-green-100">✓ PAID {unit.duties_payment_date || ''}</span>
+                      : <span className="text-[8px] font-black text-orange-500 bg-orange-50 px-2 py-0.5 rounded-lg border border-orange-100">UNPAID</span>
+                    }
                   </div>
                   <p className="text-[10px] font-bold text-gray-500 uppercase leading-relaxed">{unit.description}</p>
                 </div>
@@ -371,6 +390,9 @@ const ShipmentModule = () => {
                 <div>
                   <span className="text-[10px] font-black uppercase tracking-widest opacity-60 block mb-2">Total Valuation</span>
                   <p className="text-2xl lg:text-4xl font-black tracking-tighter">₱{new Intl.NumberFormat().format(selectedShipment.amount_php)}</p>
+                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                    Unpaid of ₱{new Intl.NumberFormat().format((selectedShipment.units||[]).reduce((sum,u)=>sum+(parseFloat(u.duties_taxes)||0),0))} total
+                  </p>
                 </div>
                 <button 
                   onClick={() => setSelectedShipment(null)}
@@ -480,6 +502,27 @@ const ShipmentModule = () => {
                           <FormInput label="Duties/Taxes" type="number" value={unit.duties_taxes} onChange={e => updateUnitField(idx, 'duties_taxes', e.target.value)} />
                         </div>
                         <FormInput label="Model Code & Details" value={unit.description} onChange={e => updateUnitField(idx, 'description', e.target.value.toUpperCase())} />
+                        <div className="mt-4 flex items-center gap-4 p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={!!unit.duties_paid}
+                              onChange={e => updateUnitField(idx, 'duties_paid', e.target.checked)}
+                              className="w-4 h-4 rounded accent-indigo-600" />
+                            <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Duties/Taxes Paid</span>
+                          </label>
+                          {unit.duties_paid && (
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="text-[8px] font-black text-gray-400 uppercase">Payment Date</span>
+                              <input type="date" value={unit.duties_payment_date || ''}
+                                onChange={e => updateUnitField(idx, 'duties_payment_date', e.target.value)}
+                                className="flex-1 px-3 py-1.5 bg-white border border-indigo-200 rounded-xl text-[10px] font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
+                            </div>
+                          )}
+                          {unit.duties_paid && (
+                            <span className="text-[9px] font-black text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100">
+                              ₱{new Intl.NumberFormat().format(parseFloat(unit.duties_taxes) || 0)} PAID
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>

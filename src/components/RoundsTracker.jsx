@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   FiClock, FiArrowLeft, FiChevronLeft, FiChevronRight, FiCheckCircle,
-  FiAlertTriangle, FiXCircle, FiUser, FiCalendar, FiTool
+  FiAlertTriangle, FiXCircle, FiUser, FiTool
 } from 'react-icons/fi';
 import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 
-const ROUND_HOURS = [9, 10, 11, 12, 14, 15, 16, 17];
+// 8 rounds/day: 9, 10, 11am then 2, 3, 4, 5pm.
+// 12pm is the lunch break — no round.
+// Each round window is that exact hour: e.g. 9am = 09:00-09:59 Manila time.
+const ROUND_HOURS = [9, 10, 11, 14, 15, 16, 17];
 
 const formatRoundLabel = (hour) => {
   const h12 = hour > 12 ? hour - 12 : hour;
@@ -14,24 +17,29 @@ const formatRoundLabel = (hour) => {
   return `${h12}:00 ${ampm}`;
 };
 
+// Returns the Manila-local hour (0-23) for a PocketBase UTC timestamp.
 const getManilaHour = (utcDateStr) => {
   const normalized = utcDateStr.includes('T') ? utcDateStr : utcDateStr.replace(' ', 'T');
-  const date = new Date(normalized);
-  const hourStr = date.toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'Asia/Manila' });
+  const hourStr = new Date(normalized).toLocaleString('en-US', {
+    hour: 'numeric', hour12: false, timeZone: 'Asia/Manila',
+  });
   return parseInt(hourStr, 10) % 24;
 };
 
+// Returns YYYY-MM-DD in Manila local time.
 const getManilaDateKey = (utcDateStr) => {
   const normalized = utcDateStr.includes('T') ? utcDateStr : utcDateStr.replace(' ', 'T');
   return new Date(normalized).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 };
 
-const getTodayManila = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+const getTodayManila = () =>
+  new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
 
 const formatDisplayDate = (dateKey) => {
   const [y, m, d] = dateKey.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
 };
 
 const RoundsTracker = ({ onBack, onOpenJob }) => {
@@ -72,53 +80,80 @@ const RoundsTracker = ({ onBack, onOpenJob }) => {
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useEffect(() => { fetchData(); }, []);
 
+  // Entries that fall on the currently selected Manila calendar date.
   const entriesForSelectedDay = useMemo(() => {
     return progressEntries.filter(e => getManilaDateKey(e.created) === selectedDate);
   }, [progressEntries, selectedDate]);
 
+  // For a given round hour on the selected date, a job should only be
+  // considered "should have been covered" if it existed (was created) before
+  // that round's hour ended. A job created at 1:30pm should not show as
+  // missed in the 9am, 10am, or 11am rounds — it didn't exist then.
+  const jobExistedByRound = (job, roundHour) => {
+    const jobCreatedDateKey = getManilaDateKey(job.created);
+    // Job was created on a different (earlier) day — always existed for all rounds
+    if (jobCreatedDateKey < selectedDate) return true;
+    // Job was created on a later day — shouldn't exist at all on this day
+    if (jobCreatedDateKey > selectedDate) return false;
+    // Job was created on the same day — only counts from the round after creation
+    const jobCreatedHour = getManilaHour(job.created);
+    // The job must have been created before the end of this round's window
+    // (i.e. before roundHour + 1:00) to be "expected" in this round.
+    return jobCreatedHour < roundHour + 1;
+  };
+
   const rounds = useMemo(() => {
     return ROUND_HOURS.map(hour => {
-      const entriesThisHour = entriesForSelectedDay.filter(e => getManilaHour(e.created) === hour);
+      // Only consider jobs that existed by the time this round happened.
+      const relevantJobs = jobs.filter(j => jobExistedByRound(j, hour));
+
+      const entriesThisHour = entriesForSelectedDay.filter(
+        e => getManilaHour(e.created) === hour
+      );
 
       const coveredJobIds = new Set(entriesThisHour.map(e => e.job));
-      const contributors = [...new Set(entriesThisHour.map(e => e.logged_by).filter(Boolean))];
+      const contributors = [...new Set(
+        entriesThisHour.map(e => e.logged_by).filter(Boolean)
+      )];
 
-      const coveredJobs = jobs.filter(j => coveredJobIds.has(j.id));
-      const missedJobs = jobs.filter(j => !coveredJobIds.has(j.id));
+      const coveredJobs = relevantJobs.filter(j => coveredJobIds.has(j.id));
+      const missedJobs = relevantJobs.filter(j => !coveredJobIds.has(j.id));
 
       let status;
-      if (jobs.length === 0) status = 'none';
+      if (relevantJobs.length === 0) status = 'none';
       else if (coveredJobs.length === 0) status = 'missed';
       else if (missedJobs.length === 0) status = 'complete';
       else status = 'partial';
 
-      return { hour, entriesThisHour, coveredJobs, missedJobs, contributors, status };
+      return { hour, entriesThisHour, coveredJobs, missedJobs, contributors, status, relevantJobs };
     });
-  }, [entriesForSelectedDay, jobs]);
+  }, [entriesForSelectedDay, jobs, selectedDate]);
 
   const changeDate = (deltaDays) => {
     const [y, m, d] = selectedDate.split('-').map(Number);
     const date = new Date(y, m - 1, d);
     date.setDate(date.getDate() + deltaDays);
-    const newKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    setSelectedDate(newKey);
+    setSelectedDate(
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    );
   };
 
   const STATUS_CONFIG = {
     complete: { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-700', icon: FiCheckCircle, label: 'Complete' },
     partial: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', icon: FiAlertTriangle, label: 'Partial' },
     missed: { bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-700', icon: FiXCircle, label: 'Missed' },
-    none: { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-400', icon: FiClock, label: 'No Jobs' },
+    none: { bg: 'bg-gray-50', border: 'border-gray-100', text: 'text-gray-400', icon: FiClock, label: 'No Jobs Yet' },
   };
 
   return (
     <div className="space-y-4">
       <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100">
-        <button onClick={onBack} className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-gray-400 hover:text-blue-600 mb-3">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-gray-400 hover:text-blue-600 mb-3"
+        >
           <SafeIcon icon={FiArrowLeft} /> Back to Jobs
         </button>
         <div className="flex items-center justify-between">
@@ -126,12 +161,19 @@ const RoundsTracker = ({ onBack, onOpenJob }) => {
             <SafeIcon icon={FiClock} className="text-blue-600" /> Rounds Tracker
           </h2>
           <div className="flex items-center gap-2">
-            <button onClick={() => changeDate(-1)} className="p-2 bg-gray-50 hover:bg-gray-100 rounded-xl text-gray-500 transition-all">
+            <button
+              onClick={() => changeDate(-1)}
+              className="p-2 bg-gray-50 hover:bg-gray-100 rounded-xl text-gray-500 transition-all"
+            >
               <SafeIcon icon={FiChevronLeft} />
             </button>
-            <div className="text-center px-2 min-w-[140px]">
-              <p className="text-[10px] font-black text-gray-900 uppercase">{isToday ? 'Today' : formatDisplayDate(selectedDate).split(',')[0]}</p>
-              <p className="text-[8px] font-bold text-gray-400 uppercase">{formatDisplayDate(selectedDate).split(',').slice(1).join(',')}</p>
+            <div className="text-center px-2 min-w-[150px]">
+              <p className="text-[10px] font-black text-gray-900 uppercase">
+                {isToday ? 'Today' : formatDisplayDate(selectedDate).split(',')[0]}
+              </p>
+              <p className="text-[8px] font-bold text-gray-400 uppercase">
+                {formatDisplayDate(selectedDate).split(',').slice(1).join(',')}
+              </p>
             </div>
             <button
               onClick={() => changeDate(1)}
@@ -167,7 +209,9 @@ const RoundsTracker = ({ onBack, onOpenJob }) => {
                     <div>
                       <p className="text-sm font-black text-gray-900">{formatRoundLabel(round.hour)} Round</p>
                       <p className="text-[9px] font-bold text-gray-400 uppercase">
-                        {round.coveredJobs.length}/{jobs.length} jobs updated
+                        {round.status === 'none'
+                          ? 'No jobs existed yet'
+                          : `${round.coveredJobs.length}/${round.relevantJobs.length} jobs updated`}
                       </p>
                     </div>
                   </div>
@@ -180,14 +224,18 @@ const RoundsTracker = ({ onBack, onOpenJob }) => {
                   <div className="px-4 pt-3 flex items-center gap-1.5 flex-wrap">
                     <SafeIcon icon={FiUser} className="text-gray-300 text-xs" />
                     {round.contributors.map(name => (
-                      <span key={name} className="text-[8px] px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full font-black uppercase">{name}</span>
+                      <span key={name} className="text-[8px] px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full font-black uppercase">
+                        {name}
+                      </span>
                     ))}
                   </div>
                 )}
 
                 {round.missedJobs.length > 0 && (
                   <div className="p-4 pt-3">
-                    <p className="text-[8px] font-black text-red-500 uppercase tracking-widest mb-2">Missed Jobs</p>
+                    <p className="text-[8px] font-black text-red-500 uppercase tracking-widest mb-2">
+                      Missed Jobs
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {round.missedJobs.map(job => {
                         const unit = units[job.unit];

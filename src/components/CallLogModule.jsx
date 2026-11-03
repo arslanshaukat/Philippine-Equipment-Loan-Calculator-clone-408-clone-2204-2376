@@ -6,6 +6,7 @@ import {
   FiPhoneForwarded, FiList, FiArrowRight, FiRefreshCw, FiUserPlus
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
+import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 
 const CallLogModule = () => {
@@ -21,16 +22,16 @@ const CallLogModule = () => {
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [futureDate, setFutureDate] = useState('');
 
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
+
   const [formData, setFormData] = useState({
-    staff_name: 'RHEA',
+    staff_name: currentStaffName,
     customer_name: '',
     phone_number: '',
     reason: '',
     status: 'Answered',
     comment: ''
   });
-
-  const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -83,10 +84,11 @@ const CallLogModule = () => {
 
       if (editingId) {
         await supabase.from('daily_call_logs_2024').update(payload).eq('id', editingId);
+        await logActivity('Call Log Updated', { name: payload.customer_name, phone: payload.phone_number, status: payload.status, comment: payload.comment }, payload.staff_name);
       } else {
         await supabase.from('daily_call_logs_2024').insert([payload]);
+        await logActivity('Call Logged', { name: payload.customer_name, phone: payload.phone_number, status: payload.status, comment: payload.comment }, payload.staff_name);
       }
-      await logActivity('Call Logged', { name: payload.customer_name, phone: payload.phone_number, status: payload.status, comment: payload.comment }, payload.staff_name);
       resetForm();
       fetchLogs();
     } catch (err) {
@@ -110,7 +112,7 @@ const CallLogModule = () => {
 
   const handleQueueToCall = (log) => {
     setFormData({
-      staff_name: formData.staff_name,
+      staff_name: currentStaffName,
       customer_name: log.customer_name,
       phone_number: log.phone_number,
       reason: log.reason,
@@ -250,9 +252,9 @@ const CallLogModule = () => {
           <form onSubmit={handleSaveCall} className="p-6 space-y-4 overflow-y-auto no-scrollbar max-h-[70vh] xl:max-h-none xl:flex-1">
             <div className="space-y-1">
               <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Encoded By</label>
-              <select value={formData.staff_name} onChange={e => setFormData({...formData, staff_name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-100 uppercase">
-                {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
-              </select>
+              <div className="w-full px-4 py-3 bg-gray-100 border border-gray-200 rounded-xl text-xs font-black text-gray-700 uppercase flex items-center gap-2">
+                <SafeIcon icon={FiUser} className="text-gray-400" /> {currentStaffName}
+              </div>
             </div>
             <FormInput label="Customer Name" value={formData.customer_name} onChange={e => setFormData({...formData, customer_name: e.target.value})} placeholder="NAME" required />
             <div className="space-y-1">
@@ -339,10 +341,9 @@ const CallLogModule = () => {
             {editingId && (
               <div className="space-y-1">
                 <label className="text-[8px] font-black text-gray-400 uppercase ml-1 tracking-widest">Processed By</label>
-                <select value={formData.staff_name} onChange={e => setFormData({...formData, staff_name: e.target.value})}
-                  className="w-full px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-orange-100 uppercase">
-                  {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
-                </select>
+                <div className="w-full px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-xs font-black text-orange-700 uppercase flex items-center gap-2">
+                  <SafeIcon icon={FiUser} className="text-orange-400" /> {currentStaffName}
+                </div>
               </div>
             )}
 
@@ -555,7 +556,7 @@ const CallLogModule = () => {
                         <ActionBtn icon={FiZap} title="Tag as Hot" onClick={() => promoteToFollowUp(log, { temperature: 'Hot' })} color="text-orange-500" />
                         <ActionBtn icon={FiCalendar} title="Schedule" onClick={() => setShowDatePicker(log)} color="text-blue-600" />
                         <ActionBtn icon={FiCheckSquare} title="Close Lead" onClick={() => closeLog(log)} color="text-gray-900" />
-                        <ActionBtn icon={FiEdit} title="Edit" onClick={() => {setEditingId(log.id); setFormData(log);}} color="text-gray-400" />
+                        <ActionBtn icon={FiEdit} title="Edit" onClick={() => {setEditingId(log.id); setFormData({...log, staff_name: currentStaffName});}} color="text-gray-400" />
                       </div>
                     </div>
                   ))}

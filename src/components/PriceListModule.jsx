@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { 
   FiTag, FiPlus, FiSearch, FiEdit, FiTrash2, FiSave, 
-  FiX, FiPrinter
+  FiX, FiPrinter, FiArchive, FiRotateCcw, FiClock
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 import UnitDetailModal from './UnitDetailModal';
+import DriveMediaViewer from './DriveMediaViewer';
 import pb from '../supabase/supabase';
 
 const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) => {
+  const [tab, setTab] = useState('active'); // 'active' | 'archived'
+  const [selectedMedia, setSelectedMedia] = useState(null);
+  const [vdriveFolders, setVdriveFolders] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -17,8 +21,7 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
   const [jobOrderUnits, setJobOrderUnits] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [selectedStaff, setSelectedStaff] = useState('');
-  const staffMembers = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
 
   const [formData, setFormData] = useState({
     key_no: '',
@@ -38,7 +41,6 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
       const { data, error } = await supabase.from('price_list_2024').select('*');
       if (error) throw error;
       if (data) {
-        // Natural Numeric Sort for Key No (1, 2, 10 instead of 1, 10, 2)
         const sortedData = [...data].sort((a, b) => {
           const aNum = parseInt(a.key_no.replace(/\D/g, '')) || 0;
           const bNum = parseInt(b.key_no.replace(/\D/g, '')) || 0;
@@ -53,11 +55,6 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
     }
   };
 
-  useEffect(() => {
-    fetchPriceList();
-    fetchJobOrderUnits();
-  }, []);
-
   const fetchJobOrderUnits = async () => {
     try {
       const jobOrderJobs = await pb.collection('jobs').getFullList({
@@ -71,16 +68,30 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
     }
   };
 
+  useEffect(() => {
+    fetchPriceList();
+    fetchJobOrderUnits();
+  }, []);
+  useEffect(() => {
+    fetch('https://drive.gtintl.com.ph/pb-api/collections/vdrive_folders/records?perPage=200&sort=name')
+      .then(r => r.json())
+      .then(d => {
+        // Show only leaf folders (have a parent_id) — skip root/category folders
+        const leaves = (d.items || []).filter(f => f.parent_id);
+        setVdriveFolders(leaves);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!selectedStaff) { alert('⚠ Please select a staff member before saving'); return; }
     setIsSaving(true);
     try {
       const payload = {
         ...formData,
         price: parseFloat(formData.price) || 0,
         sale_price: formData.sale_price === '' ? 0 : parseFloat(formData.sale_price),
-        logged_by: selectedStaff,
+        logged_by: currentStaffName,
       };
 
       if (editingId) {
@@ -117,18 +128,36 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
     setShowModal(true);
   };
 
-  const handleDelete = async (id) => {
-    const password = prompt("⚠️ SECURITY CLEARANCE REQUIRED\nEnter Admin Password to delete:");
-    if (password === 'Subic@123') {
-      try {
-        const { error } = await supabase.from('price_list_2024').delete().eq('id', id);
-        if (error) throw error;
-        fetchPriceList();
-      } catch (err) {
-        alert(err.message);
-      }
-    } else if (password !== null) {
-      alert("❌ INCORRECT PASSWORD");
+  // Archives a key by flagging it in place — no row is ever deleted, so
+  // this can't be blocked by other records (like jobs) that reference this
+  // unit. It just disappears from the Active list and shows up under
+  // Archived Keys, with who archived it and when. Its key_no is still free
+  // to be reused on a brand-new Active entry.
+  const handleArchive = async (item) => {
+    if (!window.confirm(`Archive key ${item.key_no}? This will free it up for a new unit. A record is kept under Archived Keys.`)) return;
+    try {
+      const { error } = await supabase.from('price_list_2024').update({
+        archived: true,
+        archived_by: currentStaffName,
+        archived_at: new Date().toISOString(),
+      }).eq('id', item.id);
+      if (error) throw error;
+      fetchPriceList();
+    } catch (err) {
+      alert('Failed to archive: ' + err.message);
+    }
+  };
+
+  const handleRestore = async (item) => {
+    if (!window.confirm(`Restore key ${item.key_no} back to Active inventory?`)) return;
+    try {
+      const { error } = await supabase.from('price_list_2024').update({
+        archived: false,
+      }).eq('id', item.id);
+      if (error) throw error;
+      fetchPriceList();
+    } catch (err) {
+      alert('Failed to restore: ' + err.message);
     }
   };
 
@@ -136,11 +165,19 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
     setEditingId(null);
     setFormData({
       key_no: '', type: '', make: '', model_engine: '',
-      colour: '', body: '', price: '', sale_price: '', remarks: ''
+      colour: '', body: '', price: '', sale_price: '', remarks: '',
+    vdrive_folder_id: ''
     });
   };
 
-  const filteredItems = items.filter(item => 
+  const activeItems = items.filter(i => !i.archived);
+  const archivedItems = items.filter(i => i.archived);
+
+  const filteredItems = activeItems.filter(item => 
+    Object.values(item).some(val => val?.toString().toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  const filteredArchive = archivedItems.filter(item =>
     Object.values(item).some(val => val?.toString().toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
@@ -151,15 +188,33 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
     }).format(val);
   };
 
+  const formatArchiveDate = (dateStr) => {
+    if (!dateStr) return '—';
+    return new Date(dateStr).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' });
+  };
+
   return (
     <div className="space-y-4 print:space-y-0 print:p-0">
       {/* UI HEADER - Hidden on Print */}
       <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 flex flex-col gap-3 print:hidden">
-        <div>
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-tighter">
             <SafeIcon icon={FiTag} className="text-orange-600" /> Inventory Price List
           </h2>
-          {/* Sorting label removed as requested */}
+          <div className="flex gap-1 bg-gray-50 p-1 rounded-2xl border border-gray-100">
+            <button
+              onClick={() => setTab('active')}
+              className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${tab === 'active' ? 'bg-orange-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+            >
+              Active ({activeItems.length})
+            </button>
+            <button
+              onClick={() => setTab('archived')}
+              className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${tab === 'archived' ? 'bg-orange-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+            >
+              <SafeIcon icon={FiArchive} /> Archived Keys ({archivedItems.length})
+            </button>
+          </div>
         </div>
         <div className="flex gap-2 w-full">
           <div className="relative flex-1 md:w-64">
@@ -170,8 +225,12 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
               className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-orange-100"
             />
           </div>
-          <button onClick={() => window.print()} className="p-3 bg-white text-gray-600 border border-gray-100 rounded-xl hover:text-orange-600 transition-all"><SafeIcon icon={FiPrinter} /></button>
-          <button onClick={() => { resetForm(); setShowModal(true); }} className="bg-orange-600 text-white px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-orange-700 transition-all shadow-lg shadow-orange-100 flex items-center gap-2 underline-offset-4"><SafeIcon icon={FiPlus} /> Add</button>
+          {tab === 'active' && (
+            <>
+              <button onClick={() => window.print()} className="p-3 bg-white text-gray-600 border border-gray-100 rounded-xl hover:text-orange-600 transition-all"><SafeIcon icon={FiPrinter} /></button>
+              <button onClick={() => { resetForm(); setShowModal(true); }} className="bg-orange-600 text-white px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-orange-700 transition-all shadow-lg shadow-orange-100 flex items-center gap-2 underline-offset-4"><SafeIcon icon={FiPlus} /> Add</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -184,108 +243,180 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
         </div>
       </div>
 
-      {/* TABLE SECTION - Compact Styles */}
-      {/* Mobile card view */}
-      <div className="sm:hidden space-y-2">
-        {filteredItems.map((item) => (
-          <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm cursor-pointer" onClick={() => setSelectedUnit(item)}>
-            <div className="flex justify-between items-start mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg">{item.key_no}</span>
-                <div>
-                  <div className="text-[11px] font-black text-gray-900 uppercase">{item.make}</div>
-                  <div className="text-[8px] font-bold text-orange-500 uppercase">{item.type}</div>
-                </div>
-                {jobOrderUnits[item.id] && (
-                  <span className="text-[7px] px-1.5 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase">DP Paid</span>
-                )}
-              </div>
-              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                <button onClick={() => handleEdit(item)} className="p-2 bg-gray-50 text-gray-400 rounded-xl"><SafeIcon icon={FiEdit} /></button>
-                <button onClick={() => handleDelete(item.id)} className="p-2 bg-gray-50 text-red-300 rounded-xl"><SafeIcon icon={FiTrash2} /></button>
-              </div>
-            </div>
-            <div className="text-[10px] font-bold text-gray-700 uppercase">{item.model_engine}</div>
-            <div className="text-[8px] text-gray-400 uppercase mb-2">{item.colour} • {item.body}</div>
-            <div className="flex justify-between items-center pt-2 border-t border-gray-50">
-              <div>
-                <div className="text-[8px] text-gray-400 uppercase">Price</div>
-                <div className="text-[11px] font-black text-gray-900">{formatPHP(item.price)}</div>
-              </div>
-              {item.sale_price > 0 && (
-                <div>
-                  <div className="text-[8px] text-gray-400 uppercase">Sale</div>
-                  <div className="text-[11px] font-black text-green-600">{formatPHP(item.sale_price)}</div>
-                </div>
-              )}
-              {item.remarks && (
-                <div className="max-w-[120px]">
-                  <div className="text-[8px] text-gray-400 uppercase">Remarks</div>
-                  <div className="text-[8px] text-gray-500 truncate">{item.remarks}</div>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Desktop table view */}
-      <div className="hidden sm:block bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden print:border-none print:shadow-none print:rounded-none print:block">
-        <div className="overflow-x-auto"><table className="w-full text-left border-collapse text-[10px]">
-          <thead className="bg-gray-50 print:bg-gray-100 text-[9px] font-black text-gray-500 print:text-black uppercase tracking-wider border-b border-gray-100 print:border-black">
-            <tr>
-              <th className="px-4 py-3 print:px-2 print:py-1.5 w-12 text-center">Key</th>
-              <th className="px-4 py-3 print:px-2 print:py-1.5">Unit Description</th>
-              <th className="px-4 py-3 print:px-2 print:py-1.5">Specifications</th>
-              <th className="px-4 py-3 print:px-2 print:py-1.5">Price</th>
-              <th className="px-4 py-3 print:px-2 print:py-1.5">Sale</th>
-              <th className="px-4 py-3 print:px-2 print:py-1.5">Remarks</th>
-              <th className="px-4 py-3 print:hidden text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50 print:divide-black/10">
+      {tab === 'active' ? (
+        <>
+          {/* Mobile card view */}
+          <div className="sm:hidden space-y-2">
             {filteredItems.map((item) => (
-              <tr key={item.id} className="hover:bg-orange-50/30 transition-all group print:break-inside-avoid cursor-pointer" onClick={() => setSelectedUnit(item)}>
-                <td className="px-2 py-3 print:px-2 print:py-1 font-black text-[10px] text-gray-900 text-center">
-                  {item.key_no}
-                  {jobOrderUnits[item.id] && (
-                    <div className="mt-1 text-[6px] px-1 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase print:hidden">DP</div>
-                  )}
-                </td>
-                <td className="px-4 py-3 print:px-2 print:py-1">
-                  <div className="text-[10px] font-black text-gray-900 uppercase">{item.make}</div>
-                  <div className="text-[8px] font-bold text-orange-600 uppercase print:text-black mt-0.5">{item.type}</div>
-                </td>
-                <td className="px-4 py-3 print:px-2 print:py-1">
-                  <div className="text-[10px] font-bold text-gray-800 uppercase leading-none">{item.model_engine}</div>
-                  <div className="text-[8px] text-gray-400 uppercase mt-1 print:text-gray-600">{item.colour} • {item.body}</div>
-                </td>
-                <td className="px-4 py-3 print:px-2 print:py-1 text-[10px] font-black text-gray-900 whitespace-nowrap">{formatPHP(item.price)}</td>
-                <td className="px-4 py-3 print:px-2 print:py-1 whitespace-nowrap">
-                  <span className={`text-[10px] font-black ${item.sale_price > 0 ? 'text-green-600 print:text-black print:underline' : 'text-gray-300'}`}>
-                    {formatPHP(item.sale_price)}
-                  </span>
-                </td>
-                <td className="px-4 py-3 print:px-2 print:py-1 text-[8px] font-medium text-gray-500 print:text-black leading-tight max-w-[140px]">
-                  {item.remarks || '--'}
-                </td>
-                <td className="px-4 py-3 text-right print:hidden" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex justify-end gap-1">
-                    <button onClick={() => handleEdit(item)} className="p-2 text-gray-400 hover:text-orange-600"><SafeIcon icon={FiEdit} /></button>
-                    <button onClick={() => handleDelete(item.id)} className="p-2 text-gray-300 hover:text-red-600"><SafeIcon icon={FiTrash2} /></button>
+              <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm cursor-pointer" onClick={() => setSelectedUnit(item)}>
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg">{item.key_no}</span>
+                          {item.vdrive_folder_id && (
+                            <button
+                              onClick={e => { e.stopPropagation(); setSelectedMedia({ folderId: item.vdrive_folder_id, label: [item.key_no, item.make, item.model_engine].filter(Boolean).join(' · ') }); }}
+                              className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[8px] font-black uppercase hover:bg-indigo-100 transition-all"
+                            >
+                              📷 Photos
+                            </button>
+                          )}
+                    <div>
+                      <div className="text-[11px] font-black text-gray-900 uppercase">{item.make}</div>
+                      <div className="text-[8px] font-bold text-orange-500 uppercase">{item.type}</div>
+                    </div>
+                    {jobOrderUnits[item.id] && (
+                      <span className="text-[7px] px-1.5 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase">DP Paid</span>
+                    )}
                   </div>
-                </td>
-              </tr>
+                  <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => handleEdit(item)} className="p-2 bg-gray-50 text-gray-400 rounded-xl"><SafeIcon icon={FiEdit} /></button>
+                    <button onClick={() => handleArchive(item)} className="p-2 bg-gray-50 text-amber-500 rounded-xl" title="Archive this key"><SafeIcon icon={FiArchive} /></button>
+                  </div>
+                </div>
+                <div className="text-[10px] font-bold text-gray-700 uppercase">{item.model_engine}</div>
+                <div className="text-[8px] text-gray-400 uppercase mb-2">{item.colour} • {item.body}</div>
+                <div className="flex justify-between items-center pt-2 border-t border-gray-50">
+                  <div>
+                    <div className="text-[8px] text-gray-400 uppercase">Price</div>
+                    <div className="text-[11px] font-black text-gray-900">{formatPHP(item.price)}</div>
+                  </div>
+                  {item.sale_price > 0 && (
+                    <div>
+                      <div className="text-[8px] text-gray-400 uppercase">Sale</div>
+                      <div className="text-[11px] font-black text-green-600">{formatPHP(item.sale_price)}</div>
+                    </div>
+                  )}
+                  {item.remarks && (
+                    <div className="max-w-[120px]">
+                      <div className="text-[8px] text-gray-400 uppercase">Remarks</div>
+                      <div className="text-[8px] text-gray-500 truncate">{item.remarks}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table></div>
-      </div>
+          </div>
 
-      {/* FOOTER - Only visible on print */}
-      <div className="hidden print:flex justify-between items-center mt-4 pt-4 border-t border-black/10 text-[8px] font-bold uppercase text-gray-400">
-        <span>GT Admin Portal | Confidential Pricing Document</span>
-        <span>Page 1 of 1</span>
-      </div>
+          {/* Desktop table view */}
+          <div className="hidden sm:block bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden print:border-none print:shadow-none print:rounded-none print:block">
+            <div className="overflow-x-auto"><table className="w-full text-left border-collapse text-[10px]">
+              <thead className="bg-gray-50 print:bg-gray-100 text-[9px] font-black text-gray-500 print:text-black uppercase tracking-wider border-b border-gray-100 print:border-black">
+                <tr>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5 w-12 text-center">Key</th>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5">Unit Description</th>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5">Specifications</th>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5">Price</th>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5">Sale</th>
+                  <th className="px-4 py-3 print:px-2 print:py-1.5">Remarks</th>
+                  <th className="px-4 py-3 print:hidden text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 print:divide-black/10">
+                {filteredItems.map((item) => (
+                  <tr key={item.id} className="hover:bg-orange-50/30 transition-all group print:break-inside-avoid cursor-pointer" onClick={() => setSelectedUnit(item)}>
+                    <td className="px-2 py-3 print:px-2 print:py-1 font-black text-[10px] text-gray-900 text-center">
+                      {item.key_no}
+                      {jobOrderUnits[item.id] && (
+                        <div className="mt-1 text-[6px] px-1 py-0.5 bg-amber-500 text-white rounded-full font-black uppercase print:hidden">DP</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 print:px-2 print:py-1">
+                      <div className="text-[10px] font-black text-gray-900 uppercase">{item.make}</div>
+                      <div className="text-[8px] font-bold text-orange-600 uppercase print:text-black mt-0.5">{item.type}</div>
+                    </td>
+                    <td className="px-4 py-3 print:px-2 print:py-1">
+                      <div className="text-[10px] font-bold text-gray-800 uppercase leading-none">{item.model_engine}</div>
+                      <div className="text-[8px] text-gray-400 uppercase mt-1 print:text-gray-600">{item.colour} • {item.body}</div>
+                    </td>
+                    <td className="px-4 py-3 print:px-2 print:py-1 text-[10px] font-black text-gray-900 whitespace-nowrap">{formatPHP(item.price)}</td>
+                    <td className="px-4 py-3 print:px-2 print:py-1 whitespace-nowrap">
+                      <span className={`text-[10px] font-black ${item.sale_price > 0 ? 'text-green-600 print:text-black print:underline' : 'text-gray-300'}`}>
+                        {formatPHP(item.sale_price)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 print:px-2 print:py-1 text-[8px] font-medium text-gray-500 print:text-black leading-tight max-w-[140px]">
+                      {item.remarks || '--'}
+                    </td>
+                    <td className="px-4 py-3 text-right print:hidden" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end gap-1">
+                        <button onClick={() => handleEdit(item)} className="p-2 text-gray-400 hover:text-orange-600"><SafeIcon icon={FiEdit} /></button>
+                        <button onClick={() => handleArchive(item)} className="p-2 text-amber-400 hover:text-amber-600" title="Archive this key"><SafeIcon icon={FiArchive} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          </div>
+
+          {/* FOOTER - Only visible on print */}
+          <div className="hidden print:flex justify-between items-center mt-4 pt-4 border-t border-black/10 text-[8px] font-bold uppercase text-gray-400">
+            <span>GT Admin Portal | Confidential Pricing Document</span>
+            <span>Page 1 of 1</span>
+          </div>
+        </>
+      ) : (
+        /* ARCHIVED KEYS TAB */
+        <div className="bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden">
+          {filteredArchive.length === 0 ? (
+            <div className="p-16 text-center">
+              <SafeIcon icon={FiArchive} className="text-4xl text-gray-200 mb-3 mx-auto block" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No archived keys yet</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-[10px]">
+                <thead className="bg-gray-50 text-[9px] font-black text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                  <tr>
+                    <th className="px-4 py-3 w-12 text-center">Key</th>
+                    <th className="px-4 py-3">Unit Description</th>
+                    <th className="px-4 py-3">Specifications</th>
+                    <th className="px-4 py-3">Price</th>
+                    <th className="px-4 py-3">Archived By</th>
+                    <th className="px-4 py-3">Archived On</th>
+                    <th className="px-4 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filteredArchive.map((item) => (
+                    <tr key={item.id} className="hover:bg-gray-50/50 transition-all">
+                      <td className="px-2 py-3 font-black text-[10px] text-gray-500 text-center">{item.key_no}</td>
+                      {item.vdrive_folder_id && (
+                        <td className="px-2 py-3 text-center">
+                          <button
+                            onClick={e => { e.stopPropagation(); setSelectedMedia({ folderId: item.vdrive_folder_id, label: [item.key_no, item.make, item.model_engine].filter(Boolean).join(' · ') }); }}
+                            className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[8px] font-black uppercase hover:bg-indigo-100 transition-all mx-auto"
+                          >
+                            📷 Photos
+                          </button>
+                        </td>
+                      )}
+                      <td className="px-4 py-3">
+                        <div className="text-[10px] font-black text-gray-700 uppercase">{item.make}</div>
+                        <div className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{item.type}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-[10px] font-bold text-gray-600 uppercase leading-none">{item.model_engine}</div>
+                        <div className="text-[8px] text-gray-400 uppercase mt-1">{item.colour} • {item.body}</div>
+                      </td>
+                      <td className="px-4 py-3 text-[10px] font-black text-gray-500 whitespace-nowrap">{formatPHP(item.price)}</td>
+                      <td className="px-4 py-3 text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">{item.archived_by}</td>
+                      <td className="px-4 py-3 text-[9px] font-bold text-gray-400 whitespace-nowrap">
+                        <span className="flex items-center gap-1.5"><SafeIcon icon={FiClock} className="text-gray-300" /> {formatArchiveDate(item.archived_at)}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => handleRestore(item)} className="p-2 text-gray-400 hover:text-orange-600" title="Restore to Active">
+                          <SafeIcon icon={FiRotateCcw} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* FORM MODAL */}
       {showModal && (
@@ -309,16 +440,27 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
                 <textarea value={formData.remarks} onChange={e => setFormData({...formData, remarks: e.target.value.toUpperCase()})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none" rows={2} />
               </div>
               <div className="md:col-span-4">
-                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">
-                  {!selectedStaff ? '⚠ Select Staff Before Saving' : 'Logged By'}
-                </label>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none mb-3 ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}>
-                  <option value="">— Select Staff —</option>
-                  {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
+                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Logged By</label>
+                <div className="w-full px-4 py-3 border border-gray-200 bg-gray-100 rounded-xl text-[10px] font-black text-gray-700 uppercase mb-3 flex items-center gap-2">
+                  <SafeIcon icon={FiTag} className="text-gray-400" /> {currentStaffName}
+                </div>
+              </div>
+              
+              {/* VDrive Folder */}
+              <div className="md:col-span-4">
+                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">📁 VDrive Folder (Photos)</label>
+                <select
+                  value={formData.vdrive_folder_id || ''}
+                  onChange={e => setFormData({...formData, vdrive_folder_id: e.target.value})}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-[10px] font-black text-gray-700 uppercase bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                >
+                  <option value="">— No folder linked —</option>
+                  {vdriveFolders.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
                 </select>
               </div>
-              <button type="submit" disabled={isSaving || !selectedStaff} className="md:col-span-4 py-4 bg-orange-600 text-white rounded-xl font-black uppercase tracking-widest hover:bg-orange-700 transition-all disabled:opacity-50">
+              <button type="submit" disabled={isSaving} className="md:col-span-4 py-4 bg-orange-600 text-white rounded-xl font-black uppercase tracking-widest hover:bg-orange-700 transition-all disabled:opacity-50">
                 {isSaving ? 'Saving...' : 'Save Record'}
               </button>
             </form>
@@ -326,6 +468,13 @@ const PriceListModule = ({ onNavigateToJob, onNavigateToNewJobForUnit } = {}) =>
         </div>
       )}
 
+      {selectedMedia && (
+        <DriveMediaViewer
+          folderId={selectedMedia.folderId}
+          unitLabel={selectedMedia.label}
+          onClose={() => setSelectedMedia(null)}
+        />
+      )}
       {selectedUnit && (
         <UnitDetailModal
           unit={selectedUnit}

@@ -34,7 +34,7 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
   const [employees, setEmployees] = useState({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('In Progress');
   const [workerFilter, setWorkerFilter] = useState('All');
   const [typeFilter, setTypeFilter] = useState('All');
   const [showFilters, setShowFilters] = useState(false);
@@ -50,6 +50,7 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
   }, [viewMode]);
   const [lastProgressByJob, setLastProgressByJob] = useState({});
   const [checklistStatsByJob, setChecklistStatsByJob] = useState({});
+  const [vdriveThumbByFolderId, setVdriveThumbByFolderId] = useState({});
 
   const fetchAll = async () => {
     setLoading(true);
@@ -103,6 +104,39 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
         setChecklistStatsByJob(checklistMap);
       } catch (e) {
         console.error('Failed to fetch checklist stats:', e);
+      }
+
+      // Fetch first VDrive photo for each unique folder linked to a job's unit,
+      // so we can show a real unit photo instead of the wrench placeholder when
+      // no job progress photo exists yet. Batched by unique folder_id to avoid
+      // one request per job.
+      try {
+        const folderIds = [...new Set(
+          jobRecords
+            .map(j => unitMap[j.unit]?.vdrive_folder_id)
+            .filter(Boolean)
+        )];
+
+        const thumbMap = {};
+        await Promise.all(folderIds.map(async (folderId) => {
+          try {
+            const params = new URLSearchParams({
+              perPage: '1',
+              filter: `folder_id="${folderId}" && mime_type ~ "image/"`,
+              sort: 'order,name',
+            });
+            const res = await fetch(`https://drive.gtintl.com.ph/pb-api/collections/vdrive_files/records?${params}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.items?.length > 0) {
+              const f = data.items[0];
+              thumbMap[folderId] = `https://drive.gtintl.com.ph/pb-api/files/${f.collectionId}/${f.id}/${f.file}?thumb=400x200`;
+            }
+          } catch (e) { /* VDrive unavailable, skip silently */ }
+        }));
+        setVdriveThumbByFolderId(thumbMap);
+      } catch (e) {
+        console.error('Failed to fetch VDrive thumbnails:', e);
       }
     } catch (err) {
       console.error('Failed to fetch jobs:', err);
@@ -253,6 +287,34 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
               <SafeIcon icon={FiList} className="text-sm" />
             </button>
           </div>
+
+          {/* Status quick-filter buttons — same size/style as Rounds/Performance */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {[
+              { label: 'All', color: 'bg-gray-600 hover:bg-gray-700 shadow-gray-200', icon: null },
+              { label: 'Not Started', color: 'bg-gray-500 hover:bg-gray-600 shadow-gray-200', icon: FiClock },
+              { label: 'In Progress', color: 'bg-blue-600 hover:bg-blue-700 shadow-blue-100', icon: FiPlayCircle },
+              { label: 'On Hold', color: 'bg-amber-500 hover:bg-amber-600 shadow-amber-100', icon: FiPauseCircle },
+              { label: 'Completed', color: 'bg-green-600 hover:bg-green-700 shadow-green-100', icon: FiCheckCircle },
+            ].map(({ label, color, icon }) => {
+              const isActive = statusFilter === label;
+              return (
+                <button
+                  key={label}
+                  onClick={() => setStatusFilter(label)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg transition-all whitespace-nowrap ${
+                    isActive
+                      ? `${color} text-white`
+                      : 'bg-white text-gray-400 border border-gray-200 hover:border-gray-300 shadow-none'
+                  }`}
+                >
+                  {icon && <SafeIcon icon={icon} className="text-sm" />}
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
           <button
             onClick={() => setShowRoundsView(true)}
             className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-teal-100 hover:bg-teal-700 transition-all whitespace-nowrap"
@@ -290,8 +352,7 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
         </div>
 
         {showFilters && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-gray-50">
-            <FilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={['All', ...STATUSES]} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-gray-50">
             <FilterSelect label="Job Type" value={typeFilter} onChange={setTypeFilter} options={['All', ...JOB_TYPES]} />
             <FilterSelect
               label="Worker"
@@ -335,6 +396,7 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
             const lastProgress = lastProgressByJob[job.id];
             const lastPhoto = lastProgress?.photos?.[0];
             const checklistStats = checklistStatsByJob[job.id];
+            const vdriveThumb = unit?.vdrive_folder_id ? vdriveThumbByFolderId[unit.vdrive_folder_id] : null;
 
             return (
               <button
@@ -342,13 +404,20 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
                 onClick={() => setSelectedJobId(job.id)}
                 className="bg-white rounded-[24px] border border-gray-100 shadow-sm hover:shadow-lg transition-all text-left overflow-hidden group"
               >
-                {/* Thumbnail */}
+                {/* Thumbnail — prefers latest job progress photo, falls
+                    back to unit's VDrive folder photo, then wrench icon */}
                 <div className="h-32 bg-gray-100 relative overflow-hidden">
                   {lastPhoto && lastProgress ? (
                     <img
                       src={`https://finance.gtintl.com.ph/api/files/${lastProgress.collectionId}/${lastProgress.id}/${lastPhoto}?thumb=400x200`}
                       alt=""
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : vdriveThumb ? (
+                    <img
+                      src={vdriveThumb}
+                      alt=""
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 opacity-80"
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-300">
@@ -419,6 +488,28 @@ const JobTrackerModule = ({ initialJobId, onConsumeInitialJobId, initialUnitIdFo
                         <SafeIcon icon={FiCalendar} className="text-gray-300" />
                         {daysActive(job)}d active
                       </div>
+                    )}
+                  </div>
+
+                  {/* Date stamps */}
+                  <div className="mt-2 pt-2 border-t border-gray-50 flex items-center justify-between gap-2 text-[8px] font-bold uppercase">
+                    {job.start_date && (
+                      <span className="text-gray-400 flex items-center gap-1">
+                        <SafeIcon icon={FiCalendar} />
+                        Started {new Date(job.start_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' })}
+                      </span>
+                    )}
+                    {job.status === 'Completed' && job.completed_date && (
+                      <span className="text-green-600 font-black flex items-center gap-1">
+                        <SafeIcon icon={FiCheckCircle} />
+                        Done {new Date(job.completed_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' })}
+                      </span>
+                    )}
+                    {job.pull_out_date && job.status !== 'Completed' && (
+                      <span className="text-amber-600 font-black flex items-center gap-1">
+                        <SafeIcon icon={FiAlertTriangle} />
+                        Pull out {new Date(job.pull_out_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'Asia/Manila' })}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -507,7 +598,7 @@ const JobListView = ({ jobs, units, employees, checklistStatsByJob, isStuck, day
               <th className="px-4 py-3">Job</th>
               <th className="px-4 py-3">Workers</th>
               <th className="px-4 py-3">Checklist</th>
-              <th className="px-4 py-3">Active</th>
+              <th className="px-4 py-3">Dates</th>
               <th className="px-4 py-3 text-right">Action</th>
             </tr>
           </thead>
@@ -564,8 +655,28 @@ const JobListView = ({ jobs, units, employees, checklistStatsByJob, isStuck, day
                       <span className="text-[9px] text-gray-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-[9px] font-bold text-gray-500 whitespace-nowrap">
-                    {days !== null ? `${days}d` : '—'}
+                  <td className="px-4 py-3 text-[9px] font-bold text-gray-500">
+                    {job.start_date && (
+                      <div className="text-gray-400 flex items-center gap-1 whitespace-nowrap">
+                        <SafeIcon icon={FiCalendar} className="text-gray-300" />
+                        {new Date(job.start_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' })}
+                      </div>
+                    )}
+                    {job.status === 'Completed' && job.completed_date && (
+                      <div className="text-green-600 font-black text-[8px] mt-0.5 flex items-center gap-1 whitespace-nowrap">
+                        <SafeIcon icon={FiCheckCircle} />
+                        Done {new Date(job.completed_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' })}
+                      </div>
+                    )}
+                    {job.pull_out_date && job.status !== 'Completed' && (
+                      <div className="text-amber-600 font-black text-[8px] mt-0.5 flex items-center gap-1 whitespace-nowrap">
+                        <SafeIcon icon={FiAlertTriangle} />
+                        Pull out {new Date(job.pull_out_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'Asia/Manila' })}
+                      </div>
+                    )}
+                    {days !== null && job.status !== 'Completed' && (
+                      <div className="text-gray-300 text-[8px] mt-0.5">{days}d active</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                     <button
@@ -617,8 +728,7 @@ const NewJobModal = ({ units, employees, prefillUnitId, onClose, onCreated }) =>
     pull_out_date: '',
   });
   const [isSaving, setIsSaving] = useState(false);
-  const [createdBy, setCreatedBy] = useState('');
-  const staffMembers = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
 
   const unitList = Object.values(units).sort((a, b) => {
     const aNum = parseInt(a.key_no?.replace(/\D/g, '')) || 0;
@@ -645,7 +755,6 @@ const NewJobModal = ({ units, employees, prefillUnitId, onClose, onCreated }) =>
     e.preventDefault();
     if (!formData.unit) { alert('Please select a unit'); return; }
     if (formData.assigned_workers.length === 0) { alert('Please assign at least one worker'); return; }
-    if (!createdBy) { alert('Please select your name'); return; }
 
     setIsSaving(true);
     try {
@@ -654,7 +763,7 @@ const NewJobModal = ({ units, employees, prefillUnitId, onClose, onCreated }) =>
         down_payment: formData.is_job_order ? (parseFloat(formData.down_payment) || 0) : 0,
         pull_out_date: formData.is_job_order && formData.pull_out_date ? formData.pull_out_date : null,
         customer_name: formData.is_job_order ? formData.customer_name : '',
-        created_by: createdBy,
+        created_by: currentStaffName,
       });
       onCreated();
     } catch (err) {
@@ -813,16 +922,10 @@ const NewJobModal = ({ units, employees, prefillUnitId, onClose, onCreated }) =>
           </div>
 
           <div>
-            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">
-              {!createdBy ? '⚠ Select Your Name' : 'Created By'}
-            </label>
-            <select
-              value={createdBy} onChange={e => setCreatedBy(e.target.value)}
-              className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none ${!createdBy ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}
-            >
-              <option value="">— Select —</option>
-              {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Created By</label>
+            <div className="w-full px-4 py-3 border border-gray-200 bg-gray-50 rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+              <SafeIcon icon={FiUsers} className="text-gray-400" /> {currentStaffName}
+            </div>
           </div>
 
           <button

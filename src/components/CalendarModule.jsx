@@ -34,8 +34,8 @@ const CalendarModule = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDate, setFilterDate] = useState('');
   
-  const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
-  
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
+
   const [formData, setFormData] = useState({
     client_name: '',
     contact_number: '',
@@ -49,7 +49,7 @@ const CalendarModule = () => {
     status: 'Pending',
     description: '',
     attachment_urls: [],
-    logged_by: 'RHEA'
+    logged_by: currentStaffName
   });
 
   const [uploading, setUploading] = useState(false);
@@ -210,7 +210,7 @@ const CalendarModule = () => {
             <button 
               onClick={() => {
                 setSelectedLead(null);
-                setFormData({ client_name: '', contact_number: '', address: '', make: '', model: '', body_type: '', unit_engine: '', offered_price: '', scheduled_date: new Date().toISOString().split('T')[0], status: 'Pending', description: '', attachment_urls: [], logged_by: 'RHEA' });
+                setFormData({ client_name: '', contact_number: '', address: '', make: '', model: '', body_type: '', unit_engine: '', offered_price: '', scheduled_date: new Date().toISOString().split('T')[0], status: 'Pending', description: '', attachment_urls: [], logged_by: currentStaffName });
                 setShowForm(true);
               }}
               className="bg-blue-700 text-white px-6 py-3.5 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-blue-800 shadow-xl shadow-blue-100 transition-all flex-[3] md:flex-none"
@@ -452,9 +452,9 @@ const CalendarModule = () => {
                   <SectionLabel icon={FiUserCheck} text="Agent Identification" />
                   <div>
                     <label className="block text-[9px] font-black text-gray-400 uppercase mb-2 ml-1">Processed By</label>
-                    <select value={formData.logged_by} onChange={e => setFormData({ ...formData, logged_by: e.target.value })} className="w-full px-5 py-4 bg-blue-50 border-2 border-blue-100 rounded-2xl text-[11px] font-black uppercase outline-none focus:ring-4 focus:ring-blue-100 text-blue-700">
-                      {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
-                    </select>
+                    <div className="w-full px-5 py-4 bg-blue-50 border-2 border-blue-100 rounded-2xl text-[11px] font-black uppercase text-blue-700 flex items-center gap-2">
+                      <SafeIcon icon={FiUserCheck} className="text-blue-400" /> {currentStaffName}
+                    </div>
                   </div>
                   <FormInput label="Agent / Company Name" value={formData.client_name} onChange={e => setFormData({ ...formData, client_name: e.target.value })} required />
                   <FormInput label="Contact Number" value={formData.contact_number} onChange={e => setFormData({ ...formData, contact_number: e.target.value })} required />

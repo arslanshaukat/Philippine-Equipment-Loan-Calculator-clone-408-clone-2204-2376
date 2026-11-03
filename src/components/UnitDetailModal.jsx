@@ -46,6 +46,11 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
   const [vdriveError, setVdriveError] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [reorderMode, setReorderMode] = useState(false);
+  const [reorderFiles, setReorderFiles] = useState([]);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const dragItem = React.useRef(null);
+  const dragOverItem = React.useRef(null);
 
   useEffect(() => {
     const fetchJobs = async () => {
@@ -84,7 +89,7 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
       const params = new URLSearchParams({
         perPage: '200',
         filter: `folder_id="${unit.vdrive_folder_id}"`,
-        sort: 'name',
+        sort: 'order,name',
       });
       const res = await fetch(`${VDRIVE_PB_API}/collections/vdrive_files/records?${params.toString()}`);
       if (!res.ok) {
@@ -92,7 +97,9 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
         throw new Error(`VDrive returned ${res.status}${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`);
       }
       const data = await res.json();
-      setVdriveFiles(data.items || []);
+      const items = data.items || [];
+      setVdriveFiles(items);
+      setReorderFiles(items.filter(f => f.mime_type?.startsWith('image/')));
     } catch (err) {
       console.error('Failed to fetch VDrive files:', err);
       setVdriveError('Could not load photos from VDrive. It may be temporarily unavailable.');
@@ -101,7 +108,44 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
     }
   };
 
-  const photos = vdriveFiles.filter(f => f.mime_type?.startsWith('image/'));
+  const handleDragStart = (index) => { dragItem.current = index; };
+  const handleDragEnter = (index) => { dragOverItem.current = index; };
+  const handleDragEnd = () => {
+    if (dragItem.current === null || dragOverItem.current === null) return;
+    const updated = [...reorderFiles];
+    const dragged = updated.splice(dragItem.current, 1)[0];
+    updated.splice(dragOverItem.current, 0, dragged);
+    setReorderFiles(updated);
+    dragItem.current = null;
+    dragOverItem.current = null;
+  };
+
+  const saveOrder = async () => {
+    setIsSavingOrder(true);
+    try {
+      await Promise.all(
+        reorderFiles.map((file, index) =>
+          fetch(`${VDRIVE_PB_API}/collections/vdrive_files/records/${file.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: index }),
+          })
+        )
+      );
+      setVdriveFiles(prev => {
+        const imageIds = new Set(reorderFiles.map(f => f.id));
+        const videos = prev.filter(f => !imageIds.has(f.id));
+        return [...reorderFiles, ...videos];
+      });
+      setReorderMode(false);
+    } catch (err) {
+      alert('Failed to save order: ' + err.message);
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  const photos = reorderMode ? reorderFiles : vdriveFiles.filter(f => f.mime_type?.startsWith('image/'));
   const videos = vdriveFiles.filter(f => f.mime_type?.startsWith('video/'));
 
   return (
@@ -197,13 +241,46 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
                 >
                   <SafeIcon icon={FiExternalLink} /> Open in VDrive
                 </a>
-                <button
-                  onClick={() => setShowFolderPicker(true)}
-                  className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 hover:text-blue-600"
-                >
-                  <SafeIcon icon={FiEdit} /> {unit.vdrive_folder_id ? 'Change Folder' : 'Link Folder'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {photos.length > 0 && !reorderMode && (
+                    <button
+                      onClick={() => { setReorderFiles([...photos]); setReorderMode(true); }}
+                      className="text-[9px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1.5 hover:text-blue-700"
+                    >
+                      <SafeIcon icon={FiEdit} /> Reorder Photos
+                    </button>
+                  )}
+                  {reorderMode && (
+                    <>
+                      <button
+                        onClick={saveOrder}
+                        disabled={isSavingOrder}
+                        className="text-[9px] font-black text-green-600 uppercase tracking-widest flex items-center gap-1.5 hover:text-green-700 disabled:opacity-50"
+                      >
+                        <SafeIcon icon={FiCheckCircle} /> {isSavingOrder ? 'Saving...' : 'Save Order'}
+                      </button>
+                      <button
+                        onClick={() => { setReorderMode(false); setReorderFiles(vdriveFiles.filter(f => f.mime_type?.startsWith('image/'))); }}
+                        className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 hover:text-gray-600"
+                      >
+                        <SafeIcon icon={FiX} /> Cancel
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => setShowFolderPicker(true)}
+                    className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 hover:text-blue-600"
+                  >
+                    <SafeIcon icon={FiEdit} /> {unit.vdrive_folder_id ? 'Change Folder' : 'Link Folder'}
+                  </button>
+                </div>
               </div>
+
+              {reorderMode && (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-[9px] font-bold text-blue-600 uppercase tracking-widest">
+                  Drag photos to reorder, then tap Save Order
+                </div>
+              )}
 
               {!unit.vdrive_folder_id ? (
                 <div className="text-center py-10 bg-gray-50 rounded-2xl">
@@ -226,20 +303,44 @@ const UnitDetailModal = ({ unit, onClose, onOpenJob, onCreateJob }) => {
                 <>
                   {photos.length > 0 && (
                     <div>
-                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-2">Photos ({photos.length})</p>
+                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                        Photos ({photos.length}){reorderMode ? ' — drag to reorder' : ''}
+                      </p>
                       <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                         {photos.map((file, i) => (
-                          <button
+                          <div
                             key={file.id}
-                            onClick={() => setLightboxIndex(i)}
-                            className="aspect-square bg-gray-100 rounded-xl overflow-hidden hover:opacity-80 transition-opacity"
+                            draggable={reorderMode}
+                            onDragStart={() => handleDragStart(i)}
+                            onDragEnter={() => handleDragEnter(i)}
+                            onDragEnd={handleDragEnd}
+                            onDragOver={e => e.preventDefault()}
+                            className={`aspect-square bg-gray-100 rounded-xl overflow-hidden relative ${reorderMode ? 'cursor-grab active:cursor-grabbing ring-2 ring-blue-200' : ''}`}
                           >
-                            <img
-                              src={vdriveFileUrl(file.collectionId, file.id, file.file, '200x200')}
-                              alt=""
-                              className="w-full h-full object-cover"
-                            />
-                          </button>
+                            {reorderMode ? (
+                              <img
+                                src={vdriveFileUrl(file.collectionId, file.id, file.file, '200x200')}
+                                alt=""
+                                className="w-full h-full object-cover pointer-events-none select-none"
+                              />
+                            ) : (
+                              <button
+                                onClick={() => setLightboxIndex(i)}
+                                className="w-full h-full hover:opacity-80 transition-opacity"
+                              >
+                                <img
+                                  src={vdriveFileUrl(file.collectionId, file.id, file.file, '200x200')}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              </button>
+                            )}
+                            {reorderMode && (
+                              <div className="absolute top-1 left-1 bg-black/50 text-white text-[8px] font-black rounded-full w-5 h-5 flex items-center justify-center">
+                                {i + 1}
+                              </div>
+                            )}
+                          </div>
                         ))}
                       </div>
                     </div>

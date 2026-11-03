@@ -1,0 +1,98 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { FiChevronDown, FiAnchor, FiBarChart2, FiShield, FiAward, FiStar, FiUserPlus, FiTool, FiCalendar, FiTag } from 'react-icons/fi';
+import SafeIcon from '../common/SafeIcon';
+
+const MoreMenu = ({ view, setView, canView, isSuperAdmin }) => {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0 });
+  const btnRef = useRef(null);
+  const panelRef = useRef(null);
+
+  const items = [
+    { key: 'shipments', label: 'Shipments', icon: FiAnchor, show: canView('shipments') },
+    { key: 'reports', label: 'Reports', icon: FiBarChart2, show: canView('reports') },
+    { key: 'staff', label: 'Staff', icon: FiShield, show: isSuperAdmin },
+    { key: 'rewards', label: 'Rewards', icon: FiAward, show: isSuperAdmin },
+    { key: 'leaderboard', label: 'Leaderboard', icon: FiStar, show: canView('leaderboard') },
+    { key: 'applicants', label: 'Hiring', icon: FiUserPlus, show: canView('applicants') },
+    { key: 'jobs', label: 'Jobs', icon: FiTool, show: canView('jobs') },
+    { key: 'weekly-tasks', label: 'Weekly', icon: FiCalendar, show: canView('weekly-tasks') },
+    { key: 'promo-units', label: 'Promo Units', icon: FiTag, show: canView('promo-units') },
+  ].filter((i) => i.show);
+
+  const updateCoords = () => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setCoords({ top: rect.bottom + 8, left: rect.right - 192, width: rect.width });
+  };
+
+  const toggleOpen = () => {
+    if (!open) updateCoords();
+    setOpen((o) => !o);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target) &&
+        btnRef.current && !btnRef.current.contains(e.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const handleScrollOrResize = () => setOpen(false);
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [open]);
+
+  if (items.length === 0) return null;
+
+  const isActiveGroup = items.some((i) => i.key === view);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={toggleOpen}
+        className={`text-[8px] xl:text-[10px] font-black flex items-center gap-1 xl:gap-2 px-2 xl:px-3.5 py-2 xl:py-2.5 rounded-lg xl:rounded-xl transition-all uppercase tracking-wide xl:tracking-widest whitespace-nowrap flex-shrink-0 ${
+          isActiveGroup ? 'bg-blue-700 text-white shadow-xl' : 'text-gray-500 hover:bg-gray-50'
+        }`}
+      >
+        <span>More</span>
+        <SafeIcon icon={FiChevronDown} className={`text-sm transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          style={{ position: 'fixed', top: coords.top, left: coords.left, width: 192, zIndex: 9999 }}
+          className="bg-white rounded-2xl border border-gray-100 shadow-2xl overflow-hidden py-1.5"
+        >
+          {items.map(({ key, label, icon }) => (
+            <button
+              key={key}
+              onClick={() => { setView(key); setOpen(false); }}
+              className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-left ${
+                view === key ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <SafeIcon icon={icon} className="text-sm" />
+              {label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+};
+
+export default MoreMenu;

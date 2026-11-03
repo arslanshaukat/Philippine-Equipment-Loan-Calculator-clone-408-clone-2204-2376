@@ -5,7 +5,6 @@ import SafeIcon from '../common/SafeIcon';
 
 const LOG_TYPES = ['Before', 'Daily Progress', 'Issue/Delay', 'Completed'];
 const UPLOAD_ENDPOINT = 'https://finance.gtintl.com.ph/api/job-media/upload';
-const staffMembers = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
 
 // new Date().toISOString() always returns the UTC date, which can be a day
 // behind the real Manila date during early-morning hours (e.g. 1am Manila
@@ -121,7 +120,7 @@ const AddProgressModal = ({ job, onClose, onAdded }) => {
   const [logType, setLogType] = useState('Daily Progress');
   const [logDate, setLogDate] = useState(getManilaToday());
   const [caption, setCaption] = useState('');
-  const [loggedBy, setLoggedBy] = useState('');
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
   const [photoFiles, setPhotoFiles] = useState([]);
   const [videoFiles, setVideoFiles] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -177,7 +176,7 @@ const AddProgressModal = ({ job, onClose, onAdded }) => {
     formData.append('log_date', logDate);
     formData.append('log_type', logType);
     formData.append('caption', caption);
-    formData.append('logged_by', loggedBy);
+    formData.append('logged_by', currentStaffName);
 
     const res = await fetch(UPLOAD_ENDPOINT, { method: 'POST', body: formData });
     if (!res.ok) {
@@ -189,7 +188,6 @@ const AddProgressModal = ({ job, onClose, onAdded }) => {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!loggedBy) { alert('Please select your name'); return; }
     if (photoFiles.length === 0 && videoFiles.length === 0 && !caption) {
       alert('Please add at least a photo, video, or note');
       return;
@@ -208,7 +206,7 @@ const AddProgressModal = ({ job, onClose, onAdded }) => {
         formData.append('log_date', logDate);
         formData.append('log_type', logType);
         formData.append('caption', caption);
-        formData.append('logged_by', loggedBy);
+        formData.append('logged_by', currentStaffName);
         photoFiles.forEach(file => formData.append('photos', file));
 
         setUploadStatus('uploading-photos');
@@ -372,16 +370,10 @@ const AddProgressModal = ({ job, onClose, onAdded }) => {
           </div>
 
           <div>
-            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">
-              {!loggedBy ? '⚠ Select Your Name' : 'Logged By'}
-            </label>
-            <select
-              value={loggedBy} onChange={e => setLoggedBy(e.target.value)}
-              className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none ${!loggedBy ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}
-            >
-              <option value="">— Select —</option>
-              {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Logged By</label>
+            <div className="w-full px-4 py-3 border border-gray-200 bg-gray-50 rounded-xl text-[10px] font-black text-gray-700 uppercase">
+              {currentStaffName}
+            </div>
           </div>
 
           {uploadStatus && (

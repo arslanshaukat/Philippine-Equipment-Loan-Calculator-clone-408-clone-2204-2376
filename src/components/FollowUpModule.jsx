@@ -6,6 +6,7 @@ import {
   FiUser, FiTruck
 } from 'react-icons/fi';
 import { supabase } from '../supabase/supabase';
+import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 
 const FollowUpModule = () => {
@@ -28,7 +29,8 @@ const FollowUpModule = () => {
   const [newComment, setNewComment] = useState('');
   const [reminderDate, setReminderDate] = useState('');
   const [actionType, setActionType] = useState('Call');
-  const [selectedStaff, setSelectedStaff] = useState('');
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
+  const isAdmin = pb.authStore.model?.role === 'admin';
   const [isSaving, setIsSaving] = useState(false);
   const [editingLog, setEditingLog] = useState(null); // {index, comment}
   const [includeClosedInSearch, setIncludeClosedInSearch] = useState(false);
@@ -37,17 +39,14 @@ const FollowUpModule = () => {
   const [managerDates, setManagerDates] = useState({}); // { item_id: date }
   const [savingNote, setSavingNote] = useState(null);
 
-  const staffMembers = ["RHEA", "MEL", "PRINCESS", "ARSLAN"];
-
   const handleSoldUnitNote = async (actionType = 'Note') => {
     if (!soldNote.trim() && actionType === 'Note') return;
-    if (!selectedStaff) { alert('⚠ Please select a staff member first'); return; }
     setIsSavingSoldNote(true);
     try {
       const entry = {
         date: new Date().toLocaleString(),
         note: soldNote.toUpperCase() || actionType.toUpperCase(),
-        staff: selectedStaff,
+        staff: currentStaffName,
         action: actionType,
       };
       const updatedHistory = [entry, ...(selectedSoldUnit.history || [])];
@@ -66,7 +65,7 @@ const FollowUpModule = () => {
     if (!selectedItem) { alert('No lead selected'); return; }
     setIsConverting(true);
     try {
-      const staff = selectedStaff || 'STAFF';
+      const staff = currentStaffName;
       const soldRecord = {
         buyer_name: selectedItem.customer_name,
         phone: selectedItem.phone_number,
@@ -114,7 +113,7 @@ const FollowUpModule = () => {
       const entry = {
         date: new Date().toLocaleString(),
         comment: '📌 MANAGER NOTE: ' + note.toUpperCase() + (assignedDate ? ' — CALL BY: ' + assignedDate : ''),
-        staff: 'ARSLAN',
+        staff: currentStaffName,
         action: 'Manager Note',
       };
       const updatedHistory = [entry, ...(item.history || [])];
@@ -132,13 +131,13 @@ const FollowUpModule = () => {
   };
 
   const handleHiringNote = async (action) => {
-    if (!hiringNote.trim() || !selectedStaff) return;
+    if (!hiringNote.trim()) return;
     setIsSavingHiringNote(true);
     try {
       const entry = {
         date: new Date().toLocaleString(),
         comment: hiringNote.toUpperCase(),
-        staff: selectedStaff,
+        staff: currentStaffName,
         action: action || 'Note',
       };
       const updatedHistory = [entry, ...(selectedHiringApplicant.history || [])];
@@ -158,7 +157,15 @@ const FollowUpModule = () => {
 
   const fetchApplicants = async () => {
     try {
-      const res = await fetch('/api/collections/applicants/records?perPage=500');
+      const pbToken = pb.authStore.isValid ? pb.authStore.token : null;
+      const res = await fetch('/api/collections/applicants/records?perPage=500', {
+        headers: pbToken ? { Authorization: pbToken } : {},
+      });
+      if (!res.ok) {
+        console.error('applicants fetch failed:', res.status, await res.text());
+        setApplicants([]);
+        return;
+      }
       const d = await res.json();
       console.log('[App] items:', d.items?.length, 'today:', new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Manila'}), 'sample:', d.items?.filter(a=>a.follow_up_date).map(a=>a.full_name+':'+a.follow_up_date));
       setApplicants(d.items || []);
@@ -221,37 +228,70 @@ const FollowUpModule = () => {
     });
   }, [followUps, searchTerm, activeTab, today, includeClosedInSearch]);
 
-  // Activity log - grouped by customer for a given date
+  // Activity log - now reads the real activity_log PocketBase collection
+  // (previously only read followUps[].history[], which missed Calls/Hiring actions entirely)
+  const [rawActivityLog, setRawActivityLog] = useState([]);
+
+  const fetchActivityLog = async () => {
+    try {
+      const pbToken = pb.authStore.isValid ? pb.authStore.token : null;
+      const res = await fetch('/api/collections/activity_log/records?perPage=500&sort=-created', {
+        headers: pbToken ? { Authorization: pbToken } : {},
+      });
+      if (!res.ok) {
+        console.error('activity_log fetch failed:', res.status, await res.text());
+        setRawActivityLog([]);
+        return;
+      }
+      const d = await res.json();
+      setRawActivityLog(d.items || []);
+    } catch (e) { console.error('Failed to fetch activity_log:', e); }
+  };
+
+  useEffect(() => {
+    fetchActivityLog();
+  }, []);
+
   const activityLog = useMemo(() => {
     const grouped = {};
-    followUps.forEach(item => {
-      const dayEntries = (item.history || []).filter(log => {
-        if (!log.date) return false;
-        try {
-          const logDate = new Date(log.date).toISOString().split('T')[0];
-          return logDate === activityDate;
-        } catch { return false; }
-      });
-      if (dayEntries.length === 0) return;
-      const key = item.id;
+    rawActivityLog.forEach(entry => {
+      const entryDate = (entry.created || entry.timestamp || '').slice(0, 10);
+      if (entryDate !== activityDate) return;
+
+      const details = entry.details || {};
+      const phone = details.phone || '';
+      const name = details.name || 'Unknown';
+      const normalizePhone = (p) => (p || '').replace(/\D/g, '');
+      const matchedItem = phone
+        ? followUps.find(f => normalizePhone(f.phone_number) === normalizePhone(phone))
+        : null;
+      const key = matchedItem ? matchedItem.id : (phone || name);
+
       if (!grouped[key]) {
         grouped[key] = {
-          customer_name: item.customer_name,
-          phone_number: item.phone_number,
-          item_id: item.id,
-          temperature: item.temperature,
-          status: item.status,
+          customer_name: matchedItem ? matchedItem.customer_name : name,
+          phone_number: phone,
+          item_id: matchedItem ? matchedItem.id : null,
+          temperature: matchedItem ? matchedItem.temperature : null,
+          status: matchedItem ? matchedItem.status : null,
           entries: [],
         };
       }
-      grouped[key].entries.push(...dayEntries);
+      grouped[key].entries.push({
+        date: entry.created,
+        comment: details.comment || (details.waited_minutes !== undefined ? `Waited ${details.waited_minutes}m` : '') || '',
+        staff: entry.staff,
+        action: entry.action,
+        module: entry.module,
+        attempts: details.attempts,
+      });
     });
-    // Sort each customer's entries newest first, then sort customers by latest action
+
     return Object.values(grouped).map(g => ({
       ...g,
       entries: g.entries.sort((a, b) => new Date(b.date) - new Date(a.date)),
     })).sort((a, b) => new Date(b.entries[0]?.date) - new Date(a.entries[0]?.date));
-  }, [followUps, activityDate]);
+  }, [rawActivityLog, activityDate, followUps]);
 
   const filteredApplicants = useMemo(() => {
     const s = searchTerm.toLowerCase();
@@ -298,14 +338,14 @@ const FollowUpModule = () => {
         systemLog = { 
           date: timestamp, 
           comment: `REGISTRY CLOSED`, 
-          staff: selectedStaff, 
+          staff: currentStaffName, 
           action: 'Closed' 
         };
       } else if (updates.temperature === 'Hot') {
         systemLog = { 
           date: timestamp, 
           comment: `PROMOTED TO HOT PROSPECT`, 
-          staff: selectedStaff, 
+          staff: currentStaffName, 
           action: 'Hot Prospect' 
         };
       }
@@ -334,7 +374,7 @@ const FollowUpModule = () => {
     const logEntry = {
       date: new Date().toLocaleString(),
       comment: newComment.toUpperCase(),
-      staff: selectedStaff,
+      staff: currentStaffName,
       action: actionType,
       reminder: reminderDate || null
     };
@@ -374,7 +414,7 @@ const FollowUpModule = () => {
     const logEntry = {
       date: timestamp,
       comment: `CALLED ${attempts}X — ${now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`,
-      staff: selectedStaff,
+      staff: currentStaffName,
       action: 'Call',
       attempts,
       reminder: null
@@ -413,7 +453,7 @@ const FollowUpModule = () => {
   const handleSendToCallLog = async (log) => {
     try {
       await supabase.from('daily_call_logs_2024').insert([{
-        staff_name: log.staff || selectedStaff,
+        staff_name: log.staff || currentStaffName,
         customer_name: selectedItem.customer_name,
         phone_number: selectedItem.phone_number,
         reason: log.comment || 'FROM FOLLOW-UP',
@@ -589,7 +629,7 @@ const FollowUpModule = () => {
                       ))}
                     </div>
                     {/* Manager note input - only for ARSLAN */}
-                    {selectedStaff === 'ARSLAN' && (
+                    {isAdmin && (
                       <div className="px-4 py-3 bg-amber-50 border-t border-amber-100" onClick={e => e.stopPropagation()}>
                         <p className="text-[7px] font-black text-amber-600 uppercase tracking-widest mb-2">👑 Leave Manager Instruction</p>
                         <div className="space-y-2">
@@ -803,13 +843,11 @@ const FollowUpModule = () => {
               </div>
             </div>
 
-            {/* Staff selector */}
+            {/* Staff (auto) */}
             <div className="px-5 py-3 border-b shrink-0">
-              <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}>
-                <option value="">— Select Staff —</option>
-                {['RHEA','MEL','PRINCESS','ARSLAN'].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
+              <div className="w-full px-3 py-2 border border-gray-200 bg-gray-50 rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+                <SafeIcon icon={FiUserCheck} className="text-gray-400" /> {currentStaffName}
+              </div>
             </div>
 
             {/* Add note */}
@@ -821,7 +859,7 @@ const FollowUpModule = () => {
               <div className="flex gap-2">
                 {['Called','Messaged','Interviewed','On Hold','Note'].map(action => (
                   <button key={action} onClick={() => handleHiringNote(action)}
-                    disabled={!hiringNote.trim() || !selectedStaff || isSavingHiringNote}
+                    disabled={!hiringNote.trim() || isSavingHiringNote}
                     className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-[8px] font-black uppercase disabled:opacity-40 hover:bg-purple-700 transition-all">
                     {action}
                   </button>
@@ -871,10 +909,10 @@ const FollowUpModule = () => {
             {/* Action buttons */}
             <div className="flex divide-x divide-gray-100 border-b border-gray-100 shrink-0 bg-white">
               <QuickActionBtn label="CALLED" icon={FiPhone}
-                onClick={() => { if (!selectedStaff) { alert('⚠ Select staff first'); return; } setSoldNote('CALLED'); setTimeout(() => handleSoldUnitNote('Call'), 100); }}
+                onClick={() => { setSoldNote('CALLED'); setTimeout(() => handleSoldUnitNote('Call'), 100); }}
                 color="text-blue-500" />
               <QuickActionBtn label="VISITED" icon={FiCalendar}
-                onClick={() => { if (!selectedStaff) { alert('⚠ Select staff first'); return; } setSoldNote('VISITED'); setTimeout(() => handleSoldUnitNote('Visit'), 100); }}
+                onClick={() => { setSoldNote('VISITED'); setTimeout(() => handleSoldUnitNote('Visit'), 100); }}
                 color="text-green-500" />
             </div>
 
@@ -893,15 +931,11 @@ const FollowUpModule = () => {
               </div>
 
               {/* Staff + note */}
-              <div className={`p-4 rounded-[20px] border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'}`}>
-                <p className={`text-[7px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Activity' : 'Authorized Staff'}
-                </p>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none mb-3 ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-gray-50'}`}>
-                  <option value="">— Select Staff —</option>
-                  {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+              <div className="p-4 rounded-[20px] border bg-white border-gray-100">
+                <p className="text-[7px] font-black uppercase tracking-widest mb-2 text-gray-400">Authorized Staff</p>
+                <div className="w-full px-3 py-2 border border-gray-200 bg-gray-50 rounded-xl text-[10px] font-black text-gray-700 uppercase mb-3 flex items-center gap-2">
+                  <SafeIcon icon={FiUserCheck} className="text-gray-400" /> {currentStaffName}
+                </div>
                 <textarea value={soldNote} onChange={e => setSoldNote(e.target.value)}
                   placeholder="Add follow-up note..."
                   rows={2}
@@ -917,7 +951,7 @@ const FollowUpModule = () => {
                     }}
                     className="w-full px-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black outline-none" />
                 </div>
-                <button onClick={() => handleSoldUnitNote('Note')} disabled={isSavingSoldNote || !soldNote.trim() || !selectedStaff}
+                <button onClick={() => handleSoldUnitNote('Note')} disabled={isSavingSoldNote || !soldNote.trim()}
                   className="w-full py-3 bg-green-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest disabled:opacity-50 hover:bg-green-700 transition-all">
                   {isSavingSoldNote ? 'Saving...' : 'Save Note'}
                 </button>
@@ -979,13 +1013,13 @@ const FollowUpModule = () => {
               <QuickActionBtn 
                 label={selectedItem.status === 'Closed' ? "RE-OPEN" : "CLOSE LOG"} 
                 icon={selectedItem.status === 'Closed' ? FiActivity : FiCheckSquare} 
-                onClick={() => { if (!selectedStaff) { alert('⚠ Please select a staff member first'); return; } handleUpdateLead(selectedItem.id, { status: selectedItem.status === 'Closed' ? 'Active' : 'Closed' }); }}
+                onClick={() => handleUpdateLead(selectedItem.id, { status: selectedItem.status === 'Closed' ? 'Active' : 'Closed' })}
                 color={selectedItem.status === 'Closed' ? 'text-green-600' : 'text-red-500'}
               />
               <QuickActionBtn 
                 label="HOT LEAD" 
                 icon={FiZap} 
-                onClick={() => { if (!selectedStaff) { alert('⚠ Please select a staff member first'); return; } handleUpdateLead(selectedItem.id, { temperature: 'Hot' }); }}
+                onClick={() => handleUpdateLead(selectedItem.id, { temperature: 'Hot' })}
                 active={selectedItem.temperature === 'Hot'}
                 color="text-orange-500"
               />
@@ -998,42 +1032,23 @@ const FollowUpModule = () => {
             </div>
 
             <div className="overflow-y-auto p-6 no-scrollbar bg-gray-50/30 max-h-[60vh] xl:max-h-[calc(100vh-320px)]">
-              {/* Staff Selector — always visible, required before any activity */}
-              <div className={`p-4 rounded-[24px] border shadow-sm mb-4 ${!selectedStaff ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-white'}`}>
-                <p className={`text-[8px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Activity' : 'Authorized Staff'}
-                </p>
-                <select
-                  value={selectedStaff}
-                  onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none focus:ring-2 ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600 focus:ring-red-100' : 'border-gray-100 bg-gray-50 focus:ring-indigo-100'}`}
-                >
-                  <option value="">— Select Staff —</option>
-                  {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
-                </select>
+              {/* Staff (auto) */}
+              <div className="p-4 rounded-[24px] border shadow-sm mb-4 border-gray-100 bg-white">
+                <p className="text-[8px] font-black uppercase tracking-widest mb-2 text-gray-400">Authorized Staff</p>
+                <div className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+                  <SafeIcon icon={FiUserCheck} className="text-gray-400" /> {currentStaffName}
+                </div>
               </div>
 
               {selectedItem.status !== 'Closed' && (
                 <div className="mb-12">
                   <SectionLabel icon={FiMessageSquare} text="Update Interaction" />
-                  {/* Staff Selector placeholder — now above */}
-                  <div className="hidden">
-                    <select
-                      value={selectedStaff}
-                      onChange={e => setSelectedStaff(e.target.value)}
-                      className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none focus:ring-2 ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600 focus:ring-red-100' : 'border-gray-100 bg-gray-50 focus:ring-indigo-100'}`}
-                    >
-                      <option value="">— Select Staff —</option>
-                      {staffMembers.map(name => <option key={name} value={name}>{name}</option>)}
-                    </select>
-                  </div>
-
                   {/* Quick Call Buttons */}
                   <div className="bg-white p-4 rounded-[24px] border border-gray-100 shadow-sm mb-3">
                     <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-3">Quick Call Log</p>
                     <div className="grid grid-cols-3 gap-2">
                       {[1, 2, 3].map(n => (
-                        <button key={n} type="button" onClick={() => { if (!selectedStaff) { alert('Please select a staff member first'); return; } handleQuickCall(n); }}
+                        <button key={n} type="button" onClick={() => handleQuickCall(n)}
                           className="py-3 bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all border border-blue-100 hover:border-blue-600 flex flex-col items-center gap-1">
                           <span className="text-lg font-black">{n}x</span>
                           <span className="text-[7px]">Called</span>
@@ -1074,8 +1089,7 @@ const FollowUpModule = () => {
                       />
                       <button 
                         type="submit" 
-                        disabled={isSaving || !newComment.trim() || !selectedStaff}
-                        onClick={() => { if (!selectedStaff) { alert('Please select a staff member first'); } }}
+                        disabled={isSaving || !newComment.trim()}
                         className="w-full mt-4 py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-xl disabled:opacity-50"
                       >Save Remark</button>
                     </div>
@@ -1160,16 +1174,9 @@ const FollowUpModule = () => {
               <button onClick={() => setShowConvertModal(false)} className="p-2 bg-white/10 rounded-full"><SafeIcon icon={FiX} /></button>
             </div>
             <div className="p-5 overflow-y-auto no-scrollbar space-y-3 flex-1">
-              {/* Staff selector */}
-              <div className={`p-3 rounded-2xl border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
-                <p className={`text-[7px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Confirming' : '✅ Handled By: ' + selectedStaff}
-                </p>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
-                  <option value="">— Select Staff —</option>
-                  {staffMembers.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+              {/* Staff (auto) */}
+              <div className="p-3 rounded-2xl border bg-gray-50 border-gray-100">
+                <p className="text-[7px] font-black uppercase tracking-widest text-gray-400">✅ Handled By: {currentStaffName}</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {[['Make / Brand','make','ISUZU'],['Model','model','6WF1'],['Year','year','2020'],['Color','color','WHITE'],['Chassis No','chassis_no',''],['Engine No','engine_no','']].map(([label,key,ph]) => (
@@ -1199,7 +1206,7 @@ const FollowUpModule = () => {
                 <input type="date" value={convertForm.sale_date} onChange={e => setConvertForm({...convertForm, sale_date: e.target.value})}
                   className="w-full px-3 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold uppercase outline-none focus:ring-2 focus:ring-green-100" />
               </div>
-              <button onClick={handleConvertToSold} disabled={isConverting || !selectedStaff}
+              <button onClick={handleConvertToSold} disabled={isConverting}
                 className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                 <SafeIcon icon={FiCheckCircle} /> {isConverting ? 'Converting...' : 'Confirm Sale & Close Lead'}
               </button>

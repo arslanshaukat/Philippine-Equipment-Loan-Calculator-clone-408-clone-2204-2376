@@ -1,0 +1,369 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  FiTag, FiPlus, FiSearch, FiEdit, FiTrash2, FiX, FiCopy
+} from 'react-icons/fi';
+import pb from '../supabase/supabase';
+import SafeIcon from '../common/SafeIcon';
+import DriveMediaViewer from './DriveMediaViewer';
+
+const SpecialPricesModule = () => {
+  const isAdmin = pb.authStore.model?.role === 'admin';
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
+
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [selectedMedia, setSelectedMedia] = useState(null);
+  const [vdriveFolders, setVdriveFolders] = useState([]);
+
+  const [formData, setFormData] = useState({
+    key_no: '', type: '', make: '', model_engine: '',
+    colour: '', body: '', price: '', sale_price: '', remarks: ''
+  });
+
+  const fetchItems = async () => {
+    setLoading(true);
+    try {
+      const records = await pb.collection('special_prices_2024').getFullList({ filter: 'archived != true' });
+      const sorted = [...records].sort((a, b) => {
+        const aNum = parseInt((a.key_no || '').replace(/\D/g, '')) || 0;
+        const bNum = parseInt((b.key_no || '').replace(/\D/g, '')) || 0;
+        return aNum - bNum;
+      });
+      setItems(sorted);
+    } catch (err) {
+      console.error('Failed to fetch special prices:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchItems(); }, []);
+  useEffect(() => {
+    fetch('https://drive.gtintl.com.ph/pb-api/collections/vdrive_folders/records?perPage=200&sort=name')
+      .then(r => r.json())
+      .then(d => {
+        // Show only leaf folders (have a parent_id) — skip root/category folders
+        const leaves = (d.items || []).filter(f => f.parent_id);
+        setVdriveFolders(leaves);
+      })
+      .catch(() => {});
+  }, []);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setFormData({ key_no: '', type: '', make: '', model_engine: '', colour: '', body: '', price: '', sale_price: '', remarks: '', vdrive_folder_id: '' });
+  };
+
+  const handleEdit = (item) => {
+    setEditingId(item.id);
+    setFormData({
+      key_no: item.key_no || '',
+      type: item.type || '',
+      make: item.make || '',
+      model_engine: item.model_engine || '',
+      colour: item.colour || '',
+      body: item.body || '',
+      price: item.price ? item.price.toString() : '',
+      sale_price: item.sale_price > 0 ? item.sale_price.toString() : '',
+      remarks: item.remarks || '',
+      vdrive_folder_id: item.vdrive_folder_id || '',
+    });
+    setShowModal(true);
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      const payload = {
+        ...formData,
+        price: parseFloat(formData.price) || 0,
+        sale_price: formData.sale_price === '' ? 0 : parseFloat(formData.sale_price),
+        logged_by: currentStaffName,
+      };
+      if (editingId) {
+        await pb.collection('special_prices_2024').update(editingId, payload);
+      } else {
+        await pb.collection('special_prices_2024').create(payload);
+      }
+      setShowModal(false);
+      resetForm();
+      fetchItems();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await pb.collection('special_prices_2024').delete(id);
+      setConfirmDeleteId(null);
+      fetchItems();
+    } catch (err) {
+      alert('Failed to delete: ' + err.message);
+    }
+  };
+
+  const handleCopyFromMainList = async () => {
+    if (!window.confirm('Copy current stock from the main Price List into Special Prices?\n\nThis will REPLACE any items already in Special Prices.')) return;
+    setIsCopying(true);
+    try {
+      const [mainItems, existingSpecial] = await Promise.all([
+        pb.collection('price_list_2024').getFullList({ filter: 'archived != true' }),
+        pb.collection('special_prices_2024').getFullList(),
+      ]);
+
+      await Promise.all(existingSpecial.map(i => pb.collection('special_prices_2024').delete(i.id)));
+
+      await Promise.all(mainItems.map(i => pb.collection('special_prices_2024').create({
+        key_no: i.key_no,
+        type: i.type,
+        make: i.make,
+        model_engine: i.model_engine,
+        colour: i.colour,
+        body: i.body,
+        price: i.price || 0,
+        sale_price: i.sale_price || 0,
+        remarks: i.remarks || '',
+        logged_by: currentStaffName,
+      })));
+
+      fetchItems();
+    } catch (err) {
+      alert('Copy failed: ' + err.message);
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const filteredItems = items.filter(item =>
+    Object.values(item).some(val => val?.toString().toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  const formatPHP = (val) => {
+    if (!val || val <= 0) return '-';
+    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 }).format(val);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 flex flex-col gap-3">
+        <div>
+          <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-tighter">
+            <SafeIcon icon={FiTag} className="text-purple-600" /> Special Prices
+          </h2>
+          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-1">
+            {isAdmin ? 'Admin-managed — separate from the main Price List' : 'View only'}
+          </p>
+        </div>
+        <div className="flex gap-2 w-full flex-wrap">
+          <div className="relative flex-1 md:w-64">
+            <SafeIcon icon={FiSearch} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text" placeholder="Search..." value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-100"
+            />
+          </div>
+          {isAdmin && (
+            <>
+              <button onClick={handleCopyFromMainList} disabled={isCopying}
+                className="p-3 bg-white text-gray-600 border border-gray-100 rounded-xl hover:text-purple-600 transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50">
+                <SafeIcon icon={FiCopy} /> {isCopying ? 'Copying...' : 'Copy Current Stock'}
+              </button>
+              <button onClick={() => { resetForm(); setShowModal(true); }}
+                className="bg-purple-600 text-white px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-purple-700 transition-all shadow-lg shadow-purple-100 flex items-center gap-2">
+                <SafeIcon icon={FiPlus} /> Add
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Mobile card view */}
+      <div className="sm:hidden space-y-2">
+        {loading ? (
+          <div className="p-16 text-center text-[10px] font-black uppercase tracking-widest text-gray-400">Loading...</div>
+        ) : filteredItems.length === 0 ? (
+          <div className="p-16 text-center text-[10px] font-black uppercase tracking-widest text-gray-400">No items yet</div>
+        ) : filteredItems.map((item) => (
+          <div key={item.id} className="bg-white rounded-[20px] border border-gray-100 p-4 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-purple-600 bg-purple-50 px-2 py-0.5 rounded-lg">{item.key_no}</span>
+                  {item.vdrive_folder_id && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setSelectedMedia({ folderId: item.vdrive_folder_id, label: [item.key_no, item.make, item.model_engine].filter(Boolean).join(' · ') }); }}
+                      className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[8px] font-black uppercase hover:bg-indigo-100 transition-all"
+                    >
+                      📷 Photos
+                    </button>
+                  )}
+                <div>
+                  <div className="text-[11px] font-black text-gray-900 uppercase">{item.make}</div>
+                  <div className="text-[8px] font-bold text-purple-500 uppercase">{item.type}</div>
+                </div>
+              </div>
+              {isAdmin && (
+                <div className="flex gap-1">
+                  <button onClick={() => handleEdit(item)} className="p-2 bg-gray-50 text-gray-400 rounded-xl"><SafeIcon icon={FiEdit} /></button>
+                  {confirmDeleteId === item.id ? (
+                    <button onClick={() => handleDelete(item.id)} className="p-2 bg-red-600 text-white rounded-xl text-[8px] font-black uppercase">Confirm</button>
+                  ) : (
+                    <button onClick={() => setConfirmDeleteId(item.id)} className="p-2 bg-gray-50 text-red-300 rounded-xl"><SafeIcon icon={FiTrash2} /></button>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="text-[10px] font-bold text-gray-700 uppercase">{item.model_engine}</div>
+            <div className="text-[8px] text-gray-400 uppercase mb-2">{item.colour} • {item.body}</div>
+            <div className="flex justify-between items-center pt-2 border-t border-gray-50">
+              <div>
+                <div className="text-[8px] text-gray-400 uppercase">Price</div>
+                <div className="text-[11px] font-black text-gray-900">{formatPHP(item.price)}</div>
+              </div>
+              {item.sale_price > 0 && (
+                <div>
+                  <div className="text-[8px] text-gray-400 uppercase">Sale</div>
+                  <div className="text-[11px] font-black text-green-600">{formatPHP(item.sale_price)}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table view */}
+      <div className="hidden sm:block bg-white rounded-[32px] shadow-sm border border-gray-100 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-[10px]">
+            <thead className="bg-gray-50 text-[9px] font-black text-gray-500 uppercase tracking-wider border-b border-gray-100">
+              <tr>
+                <th className="px-4 py-3 w-12 text-center">Key</th>
+                <th className="px-4 py-3">Unit Description</th>
+                <th className="px-4 py-3">Specifications</th>
+                <th className="px-4 py-3">Price</th>
+                <th className="px-4 py-3">Sale</th>
+                <th className="px-4 py-3">Remarks</th>
+                {isAdmin && <th className="px-4 py-3 text-right">Action</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={isAdmin ? 7 : 6} className="p-16 text-center text-[10px] font-black uppercase tracking-widest text-gray-400">Loading...</td></tr>
+              ) : filteredItems.length === 0 ? (
+                <tr><td colSpan={isAdmin ? 7 : 6} className="p-16 text-center text-[10px] font-black uppercase tracking-widest text-gray-400">No items yet</td></tr>
+              ) : filteredItems.map((item) => (
+                <tr key={item.id} className="hover:bg-purple-50/30 transition-all">
+                  <td className="px-2 py-3 font-black text-[10px] text-gray-900 text-center">{item.key_no}</td>
+                          {item.vdrive_folder_id && (
+                            <td className="px-2 py-3 text-center">
+                              <button
+                                onClick={e => { e.stopPropagation(); setSelectedMedia({ folderId: item.vdrive_folder_id, label: [item.key_no, item.make, item.model_engine].filter(Boolean).join(' · ') }); }}
+                                className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[8px] font-black uppercase hover:bg-indigo-100 transition-all mx-auto"
+                              >
+                                📷 Photos
+                              </button>
+                            </td>
+                          )}
+                  <td className="px-4 py-3">
+                    <div className="text-[10px] font-black text-gray-900 uppercase">{item.make}</div>
+                    <div className="text-[8px] font-bold text-purple-600 uppercase mt-0.5">{item.type}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="text-[10px] font-bold text-gray-800 uppercase leading-none">{item.model_engine}</div>
+                    <div className="text-[8px] text-gray-400 uppercase mt-1">{item.colour} • {item.body}</div>
+                  </td>
+                  <td className="px-4 py-3 text-[10px] font-black text-gray-900 whitespace-nowrap">{formatPHP(item.price)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className={`text-[10px] font-black ${item.sale_price > 0 ? 'text-green-600' : 'text-gray-300'}`}>{formatPHP(item.sale_price)}</span>
+                  </td>
+                  <td className="px-4 py-3 text-[8px] font-medium text-gray-500 leading-tight max-w-[140px]">{item.remarks || '--'}</td>
+                  {isAdmin && (
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <button onClick={() => handleEdit(item)} className="p-2 text-gray-400 hover:text-purple-600"><SafeIcon icon={FiEdit} /></button>
+                        {confirmDeleteId === item.id ? (
+                          <button onClick={() => handleDelete(item.id)} className="px-2 py-1 bg-red-600 text-white rounded-lg text-[8px] font-black uppercase">Confirm</button>
+                        ) : (
+                          <button onClick={() => setConfirmDeleteId(item.id)} className="p-2 text-gray-300 hover:text-red-600"><SafeIcon icon={FiTrash2} /></button>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isAdmin && showModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-white w-full max-w-4xl rounded-t-[24px] sm:rounded-[24px] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[92vh] flex flex-col">
+            <div className="bg-purple-600 p-6 text-white flex justify-between items-center">
+              <h3 className="text-xl font-black uppercase tracking-tight">{editingId ? 'Edit Item' : 'Add to Special Prices'}</h3>
+              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-white/10 rounded-full"><SafeIcon icon={FiX} /></button>
+            </div>
+            <form onSubmit={handleSave} className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 overflow-y-auto flex-1">
+              <InputBox label="Key No." value={formData.key_no} onChange={e => setFormData({...formData, key_no: e.target.value.toUpperCase()})} required />
+              <InputBox label="Make (Brand)" value={formData.make} onChange={e => setFormData({...formData, make: e.target.value.toUpperCase()})} required />
+              <InputBox label="Type (Unit Type)" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value.toUpperCase()})} required />
+              <InputBox label="Model/Eng" value={formData.model_engine} onChange={e => setFormData({...formData, model_engine: e.target.value.toUpperCase()})} required />
+              <InputBox label="Colour" value={formData.colour} onChange={e => setFormData({...formData, colour: e.target.value.toUpperCase()})} />
+              <InputBox label="Body" value={formData.body} onChange={e => setFormData({...formData, body: e.target.value.toUpperCase()})} />
+              <InputBox label="Price" type="number" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required />
+              <InputBox label="Sale Price" type="number" value={formData.sale_price} onChange={e => setFormData({...formData, sale_price: e.target.value})} />
+              <div className="md:col-span-4">
+                <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Remarks</label>
+                <textarea value={formData.remarks} onChange={e => setFormData({...formData, remarks: e.target.value.toUpperCase()})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none" rows={2} />
+              </div>
+              
+              {/* VDrive Folder */}
+              <div className="md:col-span-4">
+                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 block">📁 VDrive Folder (Photos)</label>
+                <select
+                  value={formData.vdrive_folder_id || ''}
+                  onChange={e => setFormData({...formData, vdrive_folder_id: e.target.value})}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-[10px] font-black text-gray-700 uppercase bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                >
+                  <option value="">— No folder linked —</option>
+                  {vdriveFolders.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button type="submit" disabled={isSaving} className="md:col-span-4 py-4 bg-purple-600 text-white rounded-xl font-black uppercase tracking-widest hover:bg-purple-700 transition-all disabled:opacity-50">
+                {isSaving ? 'Saving...' : 'Save Record'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+      {selectedMedia && (
+        <DriveMediaViewer
+          folderId={selectedMedia.folderId}
+          unitLabel={selectedMedia.label}
+          onClose={() => setSelectedMedia(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+const InputBox = ({ label, ...props }) => (
+  <div>
+    <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block ml-1">{label}</label>
+    <input {...props} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-100" />
+  </div>
+);
+
+export default SpecialPricesModule;

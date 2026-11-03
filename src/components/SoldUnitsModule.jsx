@@ -9,7 +9,6 @@ import { supabase } from '../supabase/supabase';
 import pb from '../supabase/supabase';
 import SafeIcon from '../common/SafeIcon';
 
-const STAFF = ['RHEA', 'MEL', 'PRINCESS', 'ARSLAN'];
 const PAYMENT_TYPES = ['Cash', 'Financing', 'Bank Loan', 'In-House'];
 
 const emptyForm = {
@@ -39,7 +38,7 @@ export default function SoldUnitsModule() {
   const [isSaving, setIsSaving] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [formData, setFormData] = useState(emptyForm);
-  const [selectedStaff, setSelectedStaff] = useState('');
+  const currentStaffName = (pb.authStore.model?.name || pb.authStore.model?.email || 'STAFF').toUpperCase();
   const [newNote, setNewNote] = useState('');
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [lightbox, setLightbox] = useState({ open: false, urls: [], idx: 0 });
@@ -70,7 +69,6 @@ export default function SoldUnitsModule() {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!selectedStaff) { alert('⚠ Please select a staff member before saving'); return; }
     setIsSaving(true);
     try {
       const payload = {
@@ -85,7 +83,7 @@ export default function SoldUnitsModule() {
         engine_no: (formData.engine_no || '').toUpperCase(),
         sale_price: parseFloat(formData.sale_price) || 0,
         year: parseInt(formData.year) || 0,
-        handled_by: selectedStaff,
+        handled_by: currentStaffName,
       };
 
       if (editingId) {
@@ -103,7 +101,6 @@ export default function SoldUnitsModule() {
 
   const handleEdit = (unit) => {
     setFormData({ ...emptyForm, ...unit });
-    setSelectedStaff(unit.handled_by || '');
     setEditingId(unit.id);
     setShowForm(true);
     setSelectedUnit(null);
@@ -111,13 +108,12 @@ export default function SoldUnitsModule() {
 
   const handleAddNote = async () => {
     if (!newNote.trim()) return;
-    if (!selectedStaff) { alert('⚠ Please select a staff member first'); return; }
     setIsAddingNote(true);
     try {
       const entry = {
         date: new Date().toLocaleString(),
         note: newNote.toUpperCase(),
-        staff: selectedStaff,
+        staff: currentStaffName,
       };
       const updatedHistory = [entry, ...(selectedUnit.history || [])];
       await supabase.from('sold_units').update({
@@ -152,7 +148,7 @@ export default function SoldUnitsModule() {
               <button onClick={fetchUnits} className="p-3 bg-gray-50 text-gray-400 rounded-xl border border-gray-100 hover:text-green-600 transition-all">
                 <SafeIcon icon={FiRefreshCw} className={loading ? 'animate-spin' : ''} />
               </button>
-              <button onClick={() => { setFormData(emptyForm); setEditingId(null); setSelectedStaff(''); setShowForm(true); }}
+              <button onClick={() => { setFormData(emptyForm); setEditingId(null); setShowForm(true); }}
                 className="px-4 py-3 bg-green-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-green-700 transition-all flex items-center gap-2">
                 <SafeIcon icon={FiPlus} /> Add Sale
               </button>
@@ -291,23 +287,19 @@ export default function SoldUnitsModule() {
                 </div>
               </div>
 
-              {/* Staff selector */}
-              <div className={`p-3 rounded-2xl border mb-3 ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
-                <p className={`text-[7px] font-black uppercase tracking-widest mb-1 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Adding Note' : 'Staff'}
-                </p>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
-                  <option value="">— Select Staff —</option>
-                  {STAFF.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+              {/* Staff (auto) */}
+              <div className="p-3 rounded-2xl border mb-3 bg-gray-50 border-gray-100">
+                <p className="text-[7px] font-black uppercase tracking-widest mb-1 text-gray-400">Staff</p>
+                <div className="w-full px-3 py-2 border border-gray-200 bg-white rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+                  <SafeIcon icon={FiUserCheck} className="text-gray-400" /> {currentStaffName}
+                </div>
               </div>
 
               <textarea value={newNote} onChange={e => setNewNote(e.target.value)}
                 placeholder="Add follow-up note..."
                 rows={2}
                 className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-[11px] font-bold outline-none focus:ring-2 focus:ring-green-100 mb-2" />
-              <button onClick={handleAddNote} disabled={isAddingNote || !newNote.trim() || !selectedStaff}
+              <button onClick={handleAddNote} disabled={isAddingNote || !newNote.trim()}
                 className="w-full py-3 bg-green-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest disabled:opacity-50 hover:bg-green-700 transition-all">
                 {isAddingNote ? 'Saving...' : 'Save Note'}
               </button>
@@ -396,19 +388,15 @@ export default function SoldUnitsModule() {
                 </div>
               </div>
 
-              {/* Staff */}
-              <div className={`p-4 rounded-2xl border ${!selectedStaff ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
-                <p className={`text-[8px] font-black uppercase tracking-widest mb-2 ${!selectedStaff ? 'text-red-500' : 'text-gray-400'}`}>
-                  {!selectedStaff ? '⚠ Select Staff Before Saving' : 'Handled By'}
-                </p>
-                <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)}
-                  className={`w-full px-4 py-3 border rounded-xl text-[10px] font-black uppercase outline-none ${!selectedStaff ? 'border-red-300 bg-red-50 text-red-600' : 'border-gray-200 bg-white'}`}>
-                  <option value="">— Select Staff —</option>
-                  {STAFF.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+              {/* Staff (auto) */}
+              <div className="p-4 rounded-2xl border bg-gray-50 border-gray-100">
+                <p className="text-[8px] font-black uppercase tracking-widest mb-2 text-gray-400">Handled By</p>
+                <div className="w-full px-4 py-3 border border-gray-200 bg-white rounded-xl text-[10px] font-black text-gray-700 uppercase flex items-center gap-2">
+                  <SafeIcon icon={FiUserCheck} className="text-gray-400" /> {currentStaffName}
+                </div>
               </div>
 
-              <button type="submit" disabled={isSaving || !selectedStaff}
+              <button type="submit" disabled={isSaving}
                 className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                 <SafeIcon icon={FiSave} /> {isSaving ? 'Saving...' : editingId ? 'Update Record' : 'Save Sale Record'}
               </button>
